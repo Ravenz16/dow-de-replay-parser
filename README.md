@@ -21,17 +21,14 @@
 ### Установка и запуск
 
 1. **Клонируйте репозиторий**
-   
    git clone https://github.com/Ravenz16/dow-de-replay-parser.git
    cd dow-de-replay-parser
    
 2. **Скомпилируйте проект**
-
-javac com/dow/replay/parser/*.java
+   javac com/dow/replay/parser/*.java
 
 3. **Запустите анализ на вашем реплее**
-
-java com.dow.replay.parser.Main "C:\Путь\к\реплею.rec"
+   java com.dow.replay.parser.Main "C:\Путь\к\реплею.rec"
 
 ### Первый запуск
 При первом анализе реплея программа обнаружит неизвестные actionId и запросит их описание:
@@ -41,40 +38,15 @@ ID 16974083: Постройка: Генератор (Тау)
 ID 33620481: Постройка: Оружейная (Космодесант)
 Введённые описания сохранятся в файл action_ids.properties и будут использоваться в следующих запусках автоматически.
 
-📊 Пример вывода
+## 📊 Пример вывода
 
-=== Реальные действия (без SYNC) ===
-Всего команд: 3509, из них действий: 1247
-Длительность матча: 532.75 сек (8.88 мин)
-Средний APM: 140.4
+<img width="341" height="260" alt="image" src="https://github.com/user-attachments/assets/6abdc107-d6f0-48be-b140-48192fd7fe8a" />
 
-=== У меня был план... (Sisters of Battle) ===
-  0:00 | Постройка: Генератор (Sisters of Battle) (BUILD_TRAIN)
-  0:12 | Тренировка: Отряд сестер битвы (BUILD_TRAIN)
-  0:25 | Постройка: Оружейная (Sisters of Battle) (BUILD_TRAIN)
-  0:58 | Исследование: Улучшение брони (ABILITY_RESEARCH)
-  ....
-
-=== BAD | El Bandido (Tau) ===
-  0:00 | Постройка: Путь просвещения (Tau) (BUILD_TRAIN)
-  0:05 | Тренировка: Воины огня (BUILD_TRAIN)
-  ....
   
 ## 📁 Структура проекта
 
-Dow Replay Analyzer/
-├── com/dow/replay/parser/
-│   ├── BinaryReader.java          # Чтение бинарных данных
-│   ├── Chunk.java                 # Структура Relic Chunky
-│   ├── ParsedFile.java            # Разбор чанков
-│   ├── GameInfoExtractor.java     # Извлечение метаданных
-│   ├── CommandStreamParserDE.java # Парсер команд DE
-│   ├── ReplayParserFacade.java    # Фасад для всего парсера
-│   ├── ReplayInfo.java            # Модель данных
-│   └── Main.java                  # Точка входа
-├── action_ids.properties          # База описаний actionId (создаётся автоматически)
-├── .gitignore                     # Игнорируемые файлы
-└── README.md                      # Этот файл
+<img width="404" height="257" alt="image" src="https://github.com/user-attachments/assets/9a35083c-df4c-46c5-b848-81f80942fec9" />
+
 
 ## 🗺️ План развития
 LZSS-распаковка – первые три больших блока в реплее сжаты LZSS. Их распаковка даст доступ ко всем командам (сейчас используется только последний блок).
