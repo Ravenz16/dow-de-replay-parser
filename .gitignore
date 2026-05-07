@@ -1,0 +1,20 @@
+# Compiled Java
+*.class
+target/
+build/
+
+# IDE
+.idea/
+*.iml
+.settings/
+.project
+.classpath
+.vscode/
+
+# Logs & temp
+*.log
+*.properties   # если не хотите делиться своей базой actionId (иначе уберите эту строку)
+
+# OS junk
+.DS_Store
+Thumbs.db
