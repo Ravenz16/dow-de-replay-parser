@@ -33,6 +33,36 @@ public class RelicChunkNode {
         return type + id;
     }
 
+    // =========================================================
+    // NEW
+    // =========================================================
+
+    public long getHeaderOffset() {
+
+        return headerOffset;
+    }
+
+    public long getDataOffset() {
+
+        return dataOffset;
+    }
+
+    /**
+     * offset сразу после payload
+     */
+    public long getEndOffset() {
+
+        return dataOffset + size;
+    }
+
+    /**
+     * header + payload
+     */
+    public long getTotalSize() {
+
+        return getEndOffset() - headerOffset;
+    }
+
     @Override
     public String toString() {
 
