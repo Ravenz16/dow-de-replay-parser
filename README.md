@@ -25,15 +25,20 @@
 # склонируйте репозиторий
 git clone https://github.com/Ravenz16/dow-de-replay-parser.git
 cd dow-de-replay-parser
+```
 
 # компиляция всех исходников
+```bash
 javac -d out src/com/dow/replay/**/*.java src/test/*.java
+```
 
 # запуск на вашем реплее
-java -cp out test.Main "C:\путь\к\реплею.rec"
+```bash
+java -cp out test.Main "C:\путь\к\реплею.rec
+```
 Если файлы лежат не в src, а прямо в корне – укажите правильный classpath. В вашем репозитории структура папок может отличаться, но классы скомпилируются из текущей директории:
 
-bash
+```bash
 javac com/dow/replay/**/*.java test/Main.java
 java test.Main replay.rec
 ```
