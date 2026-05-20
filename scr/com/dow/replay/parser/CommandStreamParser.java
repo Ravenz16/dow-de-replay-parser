@@ -38,12 +38,49 @@ public class CommandStreamParser {
     public static final int CMD_SQUAD_ORDER           = 0x000010B5; // приказ отряду
 
     private static final Map<Integer, String> CMD_REGISTRY = new LinkedHashMap<>();
+    public static final java.util.Set<Integer> UNIT_CMD_IDS = new java.util.HashSet<>(java.util.Arrays.asList(
+            0x000024AC, 0x000024AF, 0x000024AA, 0x000024AE, 0x000024E7, 0x000024BD, 0x000024C4,
+            0x0000C353, 0x0000C355, 0x0000C357, 0x0000C358, 0x0000C35E, 0x0000C360,
+            CMD_SQUAD_APPEAR, CMD_SQUAD_ORDER
+    ));
     static {
+        // ── Известные общие команды ─────────────────────────────────────────
         CMD_REGISTRY.put(CMD_BUILD_POWER_GENERATOR, "BUILD_POWER_GENERATOR");
-        CMD_REGISTRY.put(CMD_PLACE_BLUEPRINT,       "PLACE_BLUEPRINT");
+        CMD_REGISTRY.put(CMD_PLACE_BLUEPRINT,       "PLACE_BLUEPRINT");   // LP-здание: Observation Post, Tower of Hate и др.
         CMD_REGISTRY.put(CMD_DEMOLISH_BUILDING,     "DEMOLISH_BUILDING");
         CMD_REGISTRY.put(CMD_SQUAD_APPEAR,          "SQUAD_APPEAR");
         CMD_REGISTRY.put(CMD_SQUAD_ORDER,           "SQUAD_ORDER");
+
+        // ── Приказы юнитам (оба игрока, entity < 1M) ────────────────────────
+        CMD_REGISTRY.put(0x0000C353, "UNIT_ORDER");       // атака/движение, обе расы
+        CMD_REGISTRY.put(0x0000C355, "UNIT_ORDER_2");     // TAU unit cmd
+        CMD_REGISTRY.put(0x0000C357, "UNIT_ORDER_ATTACK");// самый частый боевой приказ
+        CMD_REGISTRY.put(0x0000C358, "UNIT_ORDER_3");     // TAU/DE unit cmd
+        CMD_REGISTRY.put(0x0000C360, "UNIT_ORDER_4");     // DE unit cmd
+        CMD_REGISTRY.put(0x0000C35E, "UNIT_ORDER_5");
+
+        // ── Команды из HQ/казарм (производство/деплой юнитов) ──────────────
+        CMD_REGISTRY.put(0x000024AC, "UNIT_SPAWN");       // TAU: деплой отряда из главки
+        CMD_REGISTRY.put(0x000024AF, "UNIT_TRAIN");       // тренировка из барака
+        CMD_REGISTRY.put(0x000024AA, "UNIT_CMD_AA");
+        CMD_REGISTRY.put(0x000024AE, "UNIT_CMD_AE");
+        CMD_REGISTRY.put(0x000024E7, "UNIT_CMD_E7");
+        CMD_REGISTRY.put(0x000024BD, "UNIT_CMD_BD");
+        CMD_REGISTRY.put(0x000024C4, "UNIT_CMD_C4");
+        CMD_REGISTRY.put(0x000003E9, "SPECIAL_CMD_3E9");
+
+        // ── Постройки Dark Eldar (entity > 1M) ──────────────────────────────
+        CMD_REGISTRY.put(0x0000C35A, "DE_PLASMA_REACTOR");  // Plasma Generator DE (y≈57-59)
+        CMD_REGISTRY.put(0x0000C359, "DE_BUILD_A");
+        CMD_REGISTRY.put(0x0000C35B, "DE_BUILD_B");
+        CMD_REGISTRY.put(0x0000C35C, "DE_BUILD_C");
+        CMD_REGISTRY.put(0x0000C35F, "DE_BUILD_D");
+        CMD_REGISTRY.put(0x0000C361, "DE_BUILD_E");
+
+        // ── Постройки TAU (entity > 1M) ──────────────────────────────────────
+        CMD_REGISTRY.put(0x0000C354, "BUILD_STRUCTURE_A"); // TAU/DE здание
+        CMD_REGISTRY.put(0x0000C356, "BUILD_STRUCTURE_B"); // TAU здание
+        CMD_REGISTRY.put(0x0000C35D, "BUILD_STRUCTURE_C"); // TAU здание (T2?)
     }
 
     public static void registerCmd(int cmdId, String name) {
@@ -80,7 +117,8 @@ public class CommandStreamParser {
         public String cmdName   = "UNKNOWN";
         public int    entityId;
         public int    playerId;         // ID игрока (0=player1, 1=player2)
-        public int    scSize;          // размер sub-command (для дебага)
+        public int    scSize;           // размер sub-command: 40=реальный приказ, 33/35=прогресс стройки
+      //  public int    scSize;          // размер sub-command (для дебага)
         public int    packetSeq;       // номер пакета в потоке
 
         public CommandCategory     category     = CommandCategory.UNKNOWN;
@@ -193,8 +231,13 @@ public class CommandStreamParser {
 
     // ── Публичные фильтры ────────────────────────────────────────────────────
 
-    public static boolean isBuildEvent(GameEvent e)          { return e.category == CommandCategory.BUILD_STRUCTURE; }
-    public static boolean isPowerGeneratorBuild(GameEvent e) { return e.cmdId == CMD_BUILD_POWER_GENERATOR; }
+    // Только 40-byte sub-commands = реальные приказы строить (не прогресс стройки)
+    public static boolean isBuildEvent(GameEvent e)          { return e.scSize == 40 && e.category == CommandCategory.BUILD_STRUCTURE; }
+    // sc=40 = явный BUILD-ордер (с координатами). sc=33/35 = события завершения стройки.
+    // C350 = TAU/SM/другие расы. C35A = DE Plasma Reactor.
+    public static boolean isPowerGeneratorBuild(GameEvent e) {
+        return e.scSize == 40 && (e.cmdId == CMD_BUILD_POWER_GENERATOR || e.cmdId == 0x0000C35A);
+    }
     public static boolean isDemolishEvent(GameEvent e)       { return e.cmdId == CMD_DEMOLISH_BUILDING; }
 
     /** Сырые события до дедупликации — для отладки. */
@@ -263,11 +306,30 @@ public class CommandStreamParser {
         int idOff  = idOffset(scSize);
         if (offset + idOff + 4 > data.length) return;
 
-        int entityId    = readIntLE(offset + 2);
-        int categoryRaw = data[offset + catOff] & 0xFF;
-        int cmdId       = readIntLE(offset + idOff);
+        int entityId = readIntLE(offset + 2);
 
-        CommandCategory category = CommandCategory.of(categoryRaw);
+        // ── Player detection ────────────────────────────────────────────
+        // data[offset+27] = player flag:
+        //   0x02 → P0 (first GPLY)   for both 40-byte and some 28/33-byte
+        //   0x03 → P1 (second GPLY)
+        int b27      = (offset + 27 < data.length) ? (data[offset + 27] & 0xFF) : 0;
+        int playerId = (b27 == 3) ? 1 : 0;
+
+        // ── cmdId / category ────────────────────────────────────────────
+        // P1's 40-byte BUILD commands use a different byte layout than P0:
+        //   [27]=0x03  [28]=buildType_low (0x50=gen, 0x52=demolish...)
+        //   [29]=0xC3  [30-32]=0x000001
+        //   → real cmdId = 0xC300 | data[28]
+        //   → category  = always BUILD_STRUCTURE (40-byte = build action)
+        final int cmdId;
+        final CommandCategory category;
+        if (scSize == 40 && b27 == 3) {
+            cmdId    = 0x0000C300 | (data[offset + 28] & 0xFF);
+            category = CommandCategory.BUILD_STRUCTURE;
+        } else {
+            cmdId    = readIntLE(offset + idOff);
+            category = CommandCategory.of(data[offset + catOff] & 0xFF);
+        }
 
         cmdStats.merge(cmdId, 1, Integer::sum);
         cmdSizes.computeIfAbsent(cmdId, k -> new TreeSet<>()).add(scSize);
@@ -280,7 +342,8 @@ public class CommandStreamParser {
         e.entityId    = entityId;
         e.scSize      = scSize;
         e.packetSeq   = seq;
-        e.playerId    = 0; // в command stream только команды живого игрока
+        e.playerId    = playerId;
+        e.scSize      = scSize;
         e.category    = category;
         e.rawData     = Arrays.copyOfRange(data, offset, offset + scSize);
 
@@ -420,6 +483,11 @@ public class CommandStreamParser {
     // SUMMARY
     // =========================================================================
 
+    public static boolean isUnitCommandEvent(GameEvent e) {
+        return UNIT_CMD_IDS.contains(e.cmdId)
+                && e.strategyType != StrategicActionType.SQUAD_EVENT;
+    }
+
     private void printSummary() {
         int raw   = rawEvents.size();
         int dedup = gameState.timeline.size();
@@ -435,18 +503,21 @@ public class CommandStreamParser {
         cmdStats.entrySet().stream()
                 .sorted((a, b) -> b.getValue().compareTo(a.getValue()))
                 .forEach(entry -> System.out.printf(
-                        "0x%08X  %-26s  sizes=%-10s  raw_count=%d%n",
+                        "  0x%08X  %-26s  count=%d%n",
                         entry.getKey(), resolveCmdName(entry.getKey()),
-                        cmdSizes.getOrDefault(entry.getKey(), Set.of()),
                         entry.getValue()));
 
-        System.out.println("\n=== TIMELINE (deduped) ===");
-        gameState.timeline.forEach(System.out::println);
+        int displayLimit = 50;
+        System.out.printf("\n=== TIMELINE (deduped, showing first %d of %d) ===%n",
+                Math.min(displayLimit, gameState.timeline.size()), gameState.timeline.size());
+        gameState.timeline.stream().limit(displayLimit).forEach(System.out::println);
+        if (gameState.timeline.size() > displayLimit)
+            System.out.printf("  ... and %d more events%n", gameState.timeline.size() - displayLimit);
 
         System.out.println("\n=== STRATEGIC ANALYSIS ===");
         long gen    = gameState.timeline.stream().filter(e -> e.cmdId == CMD_BUILD_POWER_GENERATOR).count();
         long build  = gameState.timeline.stream().filter(e -> e.category == CommandCategory.BUILD_STRUCTURE).count();
-        long orders = gameState.timeline.stream().filter(e -> e.category == CommandCategory.UNIT_ORDER).count();
+        long orders = gameState.timeline.stream().filter(e -> e.category == CommandCategory.UNIT_ORDER && e.strategyType != StrategicActionType.SQUAD_EVENT).count();
         long demol  = gameState.timeline.stream().filter(e -> e.cmdId == CMD_DEMOLISH_BUILDING).count();
         System.out.printf("Generators: %d | Builds: %d | Unit orders: %d | Demolish: %d%n",
                 gen, build, orders, demol);

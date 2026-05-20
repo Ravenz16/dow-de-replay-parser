@@ -12,6 +12,8 @@ import java.util.*;
 
 public class Main {
 
+    private static final int BOX_WIDTH = 52; // ширина рамки
+
     public static void main(String[] args) throws Exception {
         if (args.length == 0) {
             System.err.println("Usage: java Main <path_to_replay.rec>");
@@ -20,31 +22,27 @@ public class Main {
 
         byte[] data = Files.readAllBytes(Path.of(args[0]));
 
-        // ── Chunk tree ───────────────────────────────────────────────────────
         RecursiveRelicChunkParser chunkParser =
                 new RecursiveRelicChunkParser(new BinaryReader(data));
         RelicChunkNode root = chunkParser.parse(data);
 
-        // ── Players & map ────────────────────────────────────────────────────
-        List<PlayerInfo> players = extractPlayers(root, data);
-        String mapName           = extractMapName(root, data);
-        int durationTicks        = extractDurationTicks(root, data);
-        double durationSec       = durationTicks / 8.0;
+        List<PlayerInfo> players  = extractPlayers(root, data);
+        String mapName            = extractMapName(root, data);
+        int durationTicks         = extractDurationTicks(root, data);
+        double durationSec        = durationTicks / 8.0;
 
         // ── GAME SUMMARY ─────────────────────────────────────────────────────
-        System.out.println("╔══════════════════════════════════════════════╗");
-        System.out.println("║            REPLAY ANALYSIS REPORT           ║");
-        System.out.println("╠══════════════════════════════════════════════╣");
-        System.out.printf ("║  File    : %-34s║%n", shortPath(args[0]));
-        System.out.printf ("║  Map     : %-34s║%n", mapName);
-        System.out.printf ("║  Duration: %-5d ticks  (%.1f s)            ║%n", durationTicks, durationSec);
-        System.out.println("╠══════════════════════════════════════════════╣");
-        for (PlayerInfo p : players) {
-            String tag  = p.isAi ? "[BOT]" : "[HUM]";
-            String line = String.format("%s %-16s %-20s", tag, p.name, p.race);
-            System.out.printf("║  %s%-10s║%n", line, "");
-        }
-        System.out.println("╚══════════════════════════════════════════════╝");
+        boxLine('╔', '╗', '═');
+        boxText("REPLAY ANALYSIS REPORT");
+        boxLine('╠', '╣', '═');
+        boxKV("File",     shortPath(args[0]));
+        boxKV("Map",      mapName);
+        boxKV("Duration", String.format("%d ticks (%.1f s)", durationTicks, durationSec));
+        boxLine('╠', '╣', '═');
+        for (PlayerInfo p : players)
+            boxKV(p.isAi ? "[BOT]" : "[HUM]",
+                    String.format("%-16s %s", p.name, p.race));
+        boxLine('╚', '╝', '═');
 
         // ── Command stream ───────────────────────────────────────────────────
         int cmdOffset = findCommandStreamOffset(root, data);
@@ -64,26 +62,30 @@ public class Main {
         printEvents("DEMOLISH EVENTS",
                 events.stream().filter(CommandStreamParser::isDemolishEvent).toList());
 
-        // ── Player timelines ─────────────────────────────────────────────────
+        // ── Player timelines — без ENGINE событий ────────────────────────────
         System.out.println("\n========== PLAYER TIMELINES ==========");
         for (var entry : new TreeMap<>(state.playerEvents).entrySet()) {
             int pid = entry.getKey();
             List<GameEvent> pEvents = entry.getValue();
             System.out.println("\n===== " + resolvePlayerLabel(players, pid) + " =====");
+
+            // Стратегические события отдельно, ENGINE события помечаем
             pEvents.stream()
                     .sorted(Comparator.comparingDouble(e -> e.timeSeconds))
                     .limit(200)
-                    .forEach(System.out::println);
+                    .forEach(e -> {
+                        String tag = e.strategyType == StrategicActionType.SQUAD_EVENT
+                                ? "  [ENG] " : "        ";
+                        System.out.println(tag + e);
+                    });
             System.out.println("Total: " + pEvents.size());
         }
 
         // ── Strategic analysis ───────────────────────────────────────────────
         System.out.println("\n========== STRATEGIC ANALYSIS ==========");
         for (var entry : new TreeMap<>(state.playerEvents).entrySet()) {
-            int pid = entry.getKey();
-            List<GameEvent> pEvents = entry.getValue();
-            System.out.printf("%n%s%n", resolvePlayerLabel(players, pid));
-            analyzePlayer(pEvents);
+            System.out.printf("%n%s%n", resolvePlayerLabel(players, entry.getKey()));
+            analyzePlayer(entry.getValue());
         }
 
         // ── Entity analysis ──────────────────────────────────────────────────
@@ -97,34 +99,49 @@ public class Main {
     }
 
     // =========================================================================
+    // BOX DRAWING
+    // =========================================================================
+
+    private static void boxLine(char left, char right, char fill) {
+        System.out.println(left + String.valueOf(fill).repeat(BOX_WIDTH) + right);
+    }
+
+    private static void boxText(String text) {
+        int pad = (BOX_WIDTH - text.length()) / 2;
+        int rPad = BOX_WIDTH - text.length() - pad;
+        System.out.println("║" + " ".repeat(pad) + text + " ".repeat(rPad) + "║");
+    }
+
+    private static void boxKV(String key, String value) {
+        String line = String.format("  %-10s: %s", key, value);
+        // Обрезаем если слишком длинная
+        if (line.length() > BOX_WIDTH) line = line.substring(0, BOX_WIDTH - 1) + "…";
+        int rPad = BOX_WIDTH - line.length();
+        System.out.println("║" + line + " ".repeat(rPad) + "║");
+    }
+
+    // =========================================================================
     // STRATEGIC ANALYSIS
     // =========================================================================
 
     private static void analyzePlayer(List<GameEvent> events) {
-        List<GameEvent> early = events.stream()
-                .filter(e -> e.timeSeconds <= 120).toList();
+        long gens     = events.stream().filter(CommandStreamParser::isPowerGeneratorBuild).count(); // sc=40 only, не считает completion events
+        long lp       = events.stream()
+                .filter(e -> e.cmdId == CommandStreamParser.CMD_PLACE_BLUEPRINT).count();
+        long builds   = events.stream()
+                .filter(e -> CommandStreamParser.isBuildEvent(e)
+                        && !CommandStreamParser.isDemolishEvent(e)
+                        && e.cmdId != CommandStreamParser.CMD_PLACE_BLUEPRINT).count();
+        long units    = events.stream()
+                .filter(CommandStreamParser::isUnitCommandEvent).count();
+        long demolish = events.stream().filter(CommandStreamParser::isDemolishEvent).count();
 
-        long gens    = early.stream().filter(CommandStreamParser::isPowerGeneratorBuild).count();
-        long builds  = early.stream().filter(CommandStreamParser::isBuildEvent).count();
-        // Только настоящие приказы юнитам — без SQUAD_EVENT (которые события движка)
-        long orders  = early.stream()
-                .filter(e -> e.category == CommandCategory.UNIT_ORDER
-                        && e.strategyType != StrategicActionType.SQUAD_EVENT).count();
-        long demols  = events.stream().filter(CommandStreamParser::isDemolishEvent).count();
-
-        System.out.printf("  generators=%-3d  builds=%-3d  unit_orders=%-3d  demolish=%d%n",
-                gens, builds, orders, demols);
-
-        // Opening guess
-        if (gens >= 3 && orders == 0)  System.out.println("  → ECO OPENING (generator rush)");
-        else if (gens >= 2 && orders >= 1) System.out.println("  → BALANCED OPENING");
-        else if (orders >= 2 && gens <= 1) System.out.println("  → AGGRESSIVE OPENING (unit rush)");
-        else if (gens >= 1)                System.out.println("  → STANDARD OPENING");
-        else                               System.out.println("  → UNKNOWN");
+        System.out.printf("  generators=%-3d  lp_builds=%-3d  other_builds=%-3d  " +
+                "unit_cmds=%-3d  demolish=%d%n", gens, lp, builds, units, demolish);
     }
 
     // =========================================================================
-    // METADATA EXTRACTION
+    // METADATA
     // =========================================================================
 
     static class PlayerInfo {
@@ -214,7 +231,6 @@ public class Main {
             System.out.println("→ Command stream after last GPLY at 0x" + Integer.toHexString(off));
             return off;
         }
-        System.out.println("→ Using fallback 0x00050613");
         return 0x00050613;
     }
 
@@ -264,8 +280,8 @@ public class Main {
     private static RelicChunkNode findDeep(RelicChunkNode n, String type, String id) {
         if (n.type.equals(type) && n.id.equals(id)) return n;
         for (RelicChunkNode c : n.children) {
-            RelicChunkNode found = findDeep(c, type, id);
-            if (found != null) return found;
+            RelicChunkNode f = findDeep(c, type, id);
+            if (f != null) return f;
         }
         return null;
     }
