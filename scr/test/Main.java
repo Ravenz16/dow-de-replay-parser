@@ -81,6 +81,15 @@ public class Main {
             System.out.println("Total: " + pEvents.size());
         }
 
+        // ── Build Order (key actions only) ───────────────────────────────────
+        System.out.println("\n========== BUILD ORDER (ключевые действия) ==========");
+        for (var entry : new TreeMap<>(state.playerEvents).entrySet()) {
+            int pid = entry.getKey();
+            List<GameEvent> pEvents = entry.getValue();
+            System.out.println("\n===== " + resolvePlayerLabel(players, pid) + " =====");
+            printBuildOrder(pEvents);
+        }
+
         // ── Strategic analysis ───────────────────────────────────────────────
         System.out.println("\n========== STRATEGIC ANALYSIS ==========");
         for (var entry : new TreeMap<>(state.playerEvents).entrySet()) {
@@ -124,20 +133,134 @@ public class Main {
     // STRATEGIC ANALYSIS
     // =========================================================================
 
-    private static void analyzePlayer(List<GameEvent> events) {
-        long gens     = events.stream().filter(CommandStreamParser::isPowerGeneratorBuild).count(); // sc=40 only, не считает completion events
-        long lp       = events.stream()
-                .filter(e -> e.cmdId == CommandStreamParser.CMD_PLACE_BLUEPRINT).count();
-        long builds   = events.stream()
-                .filter(e -> CommandStreamParser.isBuildEvent(e)
-                        && !CommandStreamParser.isDemolishEvent(e)
-                        && e.cmdId != CommandStreamParser.CMD_PLACE_BLUEPRINT).count();
-        long units    = events.stream()
-                .filter(CommandStreamParser::isUnitCommandEvent).count();
-        long demolish = events.stream().filter(CommandStreamParser::isDemolishEvent).count();
+    /**
+     * Сжатый билд-ордер: только ключевые действия (постройки + тренировка + апгрейды + бой).
+     * Кластеры reinforce-событий схлопываются в одну строку.
+     */
+    private static void printBuildOrder(List<GameEvent> events) {
+        var sorted = events.stream()
+                .sorted(Comparator.comparingDouble(e -> e.timeSeconds))
+                .toList();
 
-        System.out.printf("  generators=%-3d  lp_builds=%-3d  other_builds=%-3d  " +
-                "unit_cmds=%-3d  demolish=%d%n", gens, lp, builds, units, demolish);
+        int gensCount = 0, lpCount = 0;
+        boolean barracksSeen = false;   // первая C350 игрока = Казармы, остальные = генераторы
+        Double clusterStart = null, clusterEnd = null;
+        int clusterCount = 0;
+        int clusterCmd = 0;
+
+        for (GameEvent e : sorted) {
+            String label = null;
+
+            if (CommandStreamParser.isPowerGeneratorBuild(e)) {
+                // В DoW первая базовая постройка C350 = Казармы (барак, откуда выходит пехота),
+                // далее идут Генераторы. Тип здания в команде не закодирован — определяем по порядку.
+                // DE-генератор (Plasma Reactor, C35A) считаем генератором всегда — барак DE
+                // строится отдельной (28-byte, невидимой) командой.
+                if (e.cmdId == 0x0000C350 && !barracksSeen) {
+                    barracksSeen = true;
+                    label = "🏠 Барак (Казармы)";
+                    if (e.hasCoords) label += String.format(" pos=(%d,%d,%d)", e.x, e.y, e.z);
+                } else {
+                    gensCount++;
+                    String race = (e.cmdId == 0x0000C35A) ? "Plasma Reactor" : "Генератор";
+                    label = String.format("⚡ %s #%d", race, gensCount);
+                    if (e.hasCoords) label += String.format(" pos=(%d,%d,%d)", e.x, e.y, e.z);
+                }
+            }
+            else if (CommandStreamParser.isLpDefense(e)) {
+                lpCount++;
+                String lpName = (e.cmdId == 0x0000C35F) ? "Башня ненависти (DE)" : "Пост на точке (LP)";
+                label = String.format("🛡 %s #%d", lpName, lpCount);
+                if (e.hasCoords) label += String.format(" pos=(%d,%d,%d)", e.x, e.y, e.z);
+            }
+            else if (CommandStreamParser.isLpCapture(e)) {
+                label = "🏳 Захват точки";
+            }
+            else if (CommandStreamParser.isTechBuilding(e)) {
+                label = "🏛 TECH building (T2/T3)";
+                if (e.hasCoords) label += String.format(" pos=(%d,%d,%d)", e.x, e.y, e.z);
+            }
+            else if (CommandStreamParser.isBuildingUpgrade(e)) {
+                label = "⬆ Building upgrade";
+            }
+            else if (e.cmdId == 0x000024AF) { // UNIT_TRAIN_ORDER
+                label = "👥 Train unit (from building)";
+            }
+            else if (CommandStreamParser.isSpecialAbility(e)) {
+                label = "✨ Special ability / research";
+            }
+            else if (CommandStreamParser.isSquadReinforce(e) && e.scSize == 40) {
+                // Пополнение отряда — только sc=40 (реальный приказ)
+                if (clusterCmd == e.cmdId && clusterEnd != null && e.timeSeconds - clusterEnd < 5) {
+                    clusterEnd = e.timeSeconds;
+                    clusterCount++;
+                    continue;
+                }
+                if (clusterCount > 0) flushCluster(clusterCmd, clusterStart, clusterEnd, clusterCount);
+                clusterCmd = e.cmdId;
+                clusterStart = e.timeSeconds;
+                clusterEnd = e.timeSeconds;
+                clusterCount = 1;
+                continue;
+            }
+            else {
+                continue; // прочее (move/attack/spawn/completion-шум) не показываем
+            }
+
+            // печатаем немедленное событие: сначала сбрасываем активный кластер
+            if (clusterCount > 0) flushCluster(clusterCmd, clusterStart, clusterEnd, clusterCount);
+            clusterCount = 0;
+            clusterCmd = 0;          // ← сброс чтобы следующий кластер не склеился со старым
+            clusterEnd = null;
+
+            System.out.printf("  [%6.1fs] %s%n", e.timeSeconds, label);
+        }
+        if (clusterCount > 0) flushCluster(clusterCmd, clusterStart, clusterEnd, clusterCount);
+    }
+
+    private static void flushCluster(int cmdId, Double start, Double end, int count) {
+        if (count == 0) return;
+        String name;
+        if (cmdId == 0x0000C354) name = "🔄 Пополнение отряда A";
+        else if (cmdId == 0x0000C356) name = "🔄 Пополнение отряда B";
+        else name = String.format("? cmd=0x%08x", cmdId);
+
+        if (count == 1)
+            System.out.printf("  [%6.1fs] %s%n", start, name);
+        else
+            System.out.printf("  [%6.1fs..%.1fs] %s ×%d%n", start, end, name, count);
+    }
+
+    private static void analyzePlayer(List<GameEvent> events) {
+        // === ЭКОНОМИКА И ИНФРАСТРУКТУРА ===
+        // Первая C350 = Казармы, остальные = генераторы (тип не закодирован в команде).
+        long c350     = events.stream().filter(e -> CommandStreamParser.isPowerGeneratorBuild(e)
+                && e.cmdId == 0x0000C350).count();
+        long plasma   = events.stream().filter(e -> CommandStreamParser.isPowerGeneratorBuild(e)
+                && e.cmdId == 0x0000C35A).count();
+        long barracks = c350 > 0 ? 1 : 0;          // первая C350
+        long gens     = (c350 > 0 ? c350 - 1 : 0) + plasma;   // остальные C350 + плазма DE
+        long lpDef    = events.stream().filter(CommandStreamParser::isLpDefense).count();
+        long lpCap    = events.stream().filter(CommandStreamParser::isLpCapture).count();
+        long tech     = events.stream().filter(CommandStreamParser::isTechBuilding).count();
+        long upgrade  = events.stream().filter(CommandStreamParser::isBuildingUpgrade).count();
+
+        // === АРМИЯ ===
+        long trainOrd = events.stream().filter(e -> e.cmdId == 0x000024AF).count();
+        long deploy   = events.stream().filter(e -> e.cmdId == 0x000024AC).count();
+        long reinf    = events.stream().filter(CommandStreamParser::isSquadReinforce).count();
+        long attacks  = events.stream().filter(CommandStreamParser::isAttackOrder).count();
+        long orders   = events.stream().filter(CommandStreamParser::isUnitOrder).count() - attacks;
+        long special  = events.stream().filter(CommandStreamParser::isSpecialAbility).count();
+
+        System.out.println("  Экономика:");
+        System.out.printf("    barracks=%-2d  generators=%-2d  lp_defenses=%-2d  lp_captures=%-2d  tech_buildings=%-2d  upgrades=%d%n",
+                barracks, gens, lpDef, lpCap, tech, upgrade);
+        System.out.println("  Армия:");
+        System.out.printf("    train_orders=%-2d  unit_deploy=%-2d  squad_reinforce=%-2d%n",
+                trainOrd, deploy, reinf);
+        System.out.printf("    attack_orders=%-2d  move/special_orders=%-2d  abilities=%d%n",
+                attacks, orders, special);
     }
 
     // =========================================================================

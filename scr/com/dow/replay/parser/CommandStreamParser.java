@@ -44,43 +44,53 @@ public class CommandStreamParser {
             CMD_SQUAD_APPEAR, CMD_SQUAD_ORDER
     ));
     static {
-        // ── Известные общие команды ─────────────────────────────────────────
-        CMD_REGISTRY.put(CMD_BUILD_POWER_GENERATOR, "BUILD_POWER_GENERATOR");
-        CMD_REGISTRY.put(CMD_PLACE_BLUEPRINT,       "PLACE_BLUEPRINT");   // LP-здание: Observation Post, Tower of Hate и др.
-        CMD_REGISTRY.put(CMD_DEMOLISH_BUILDING,     "DEMOLISH_BUILDING");
+        // ── Питание (entity > 1M, sc=40 с координатами) ─────────────────────
+        CMD_REGISTRY.put(CMD_BUILD_POWER_GENERATOR, "BUILD_GENERATOR");      // TAU/SM/Eldar generator (C350)
+        CMD_REGISTRY.put(0x0000C35A,                "DE_PLASMA_REACTOR");    // DE Plasma Generator
+
+        // ── LP контроль ─────────────────────────────────────────────────────
+        CMD_REGISTRY.put(CMD_PLACE_BLUEPRINT,       "PLACE_LP_DEFENSE");     // Observation Post (TAU) / Tower of Hate (DE)
+        CMD_REGISTRY.put(CMD_DEMOLISH_BUILDING,     "CAPTURE_LP");           // снос neutral structure при захвате
+
+        // ── TAU постройки (entity > 1M, sc=40) ──────────────────────────────
+        CMD_REGISTRY.put(0x0000C35D, "TAU_TECH_BUILDING");  // Путь к Просвещению (T2), Broadside Bay и др.
+
+        // ── DE постройки (entity > 1M, sc=40) ───────────────────────────────
+        CMD_REGISTRY.put(0x0000C359, "DE_UNIT_ORDER_A");    // приказ/спавн юнитов DE (НЕ здание)
+        CMD_REGISTRY.put(0x0000C35B, "DE_TECH_BUILDING");   // Лаборатория гомункула / Концлагерь
+        CMD_REGISTRY.put(0x0000C35C, "DE_UNIT_ORDER_C");    // приказ юнитов DE (НЕ здание)
+        CMD_REGISTRY.put(0x0000C35F, "DE_TOWER_OF_HATE");   // Башня ненависти (защита ЛП)
+        CMD_REGISTRY.put(0x0000C361, "DE_UNIT_ORDER_E");
+
+        // ── Пополнение отрядов / тренировка из зданий (entity > 1M) ─────────
+        CMD_REGISTRY.put(0x0000C354, "REINFORCE_SQUAD_A");  // тренировка/пополнение отряда типа A
+        CMD_REGISTRY.put(0x0000C356, "REINFORCE_SQUAD_B");  // тренировка/пополнение отряда типа B
+
+        // ── Тренировка/деплой юнитов (entity < 1M) ──────────────────────────
+        CMD_REGISTRY.put(0x000024AC, "UNIT_DEPLOY");        // юнит появляется на поле (из главки/после тренировки)
+        CMD_REGISTRY.put(0x000024AF, "UNIT_TRAIN_ORDER");   // приказ тренировать юнит в здании
+
+        // ── Команды на здания (entity > 1M) ─────────────────────────────────
+        CMD_REGISTRY.put(0x000024AA, "BUILDING_CMD_AA");    // команда строению (assign worker?)
+        CMD_REGISTRY.put(0x000024AE, "BUILDING_UPGRADE");   // апгрейд строения (LP upgrade и т.п.) ✓
+        CMD_REGISTRY.put(0x000024E7, "BUILDING_CMD_E7");
+        CMD_REGISTRY.put(0x000024BD, "BUILDING_CMD_BD");
+        CMD_REGISTRY.put(0x000024C4, "BUILDING_CMD_C4");
+
+        // ── Приказы юнитам (entity < 1M) ────────────────────────────────────
+        CMD_REGISTRY.put(0x0000C353, "UNIT_MOVE");          // движение/общий приказ юниту
+        CMD_REGISTRY.put(0x0000C355, "TAU_ABILITY_A");      // TAU спец. (markerlight?)
+        CMD_REGISTRY.put(0x0000C357, "UNIT_ATTACK");        // приказ атаковать
+        CMD_REGISTRY.put(0x0000C358, "TAU_ABILITY_B");      // TAU спец.
+        CMD_REGISTRY.put(0x0000C360, "DE_ABILITY");         // DE спец. (combat drug?)
+        CMD_REGISTRY.put(0x0000C35E, "UNIT_SPECIAL_5");
+
+        // ── Спец. абилки / research ─────────────────────────────────────────
+        CMD_REGISTRY.put(0x000003E9, "SPECIAL_ABILITY");    // абилка/research click
+
+        // ── Squad events (если встретятся) ──────────────────────────────────
         CMD_REGISTRY.put(CMD_SQUAD_APPEAR,          "SQUAD_APPEAR");
         CMD_REGISTRY.put(CMD_SQUAD_ORDER,           "SQUAD_ORDER");
-
-        // ── Приказы юнитам (оба игрока, entity < 1M) ────────────────────────
-        CMD_REGISTRY.put(0x0000C353, "UNIT_ORDER");       // атака/движение, обе расы
-        CMD_REGISTRY.put(0x0000C355, "UNIT_ORDER_2");     // TAU unit cmd
-        CMD_REGISTRY.put(0x0000C357, "UNIT_ORDER_ATTACK");// самый частый боевой приказ
-        CMD_REGISTRY.put(0x0000C358, "UNIT_ORDER_3");     // TAU/DE unit cmd
-        CMD_REGISTRY.put(0x0000C360, "UNIT_ORDER_4");     // DE unit cmd
-        CMD_REGISTRY.put(0x0000C35E, "UNIT_ORDER_5");
-
-        // ── Команды из HQ/казарм (производство/деплой юнитов) ──────────────
-        CMD_REGISTRY.put(0x000024AC, "UNIT_SPAWN");       // TAU: деплой отряда из главки
-        CMD_REGISTRY.put(0x000024AF, "UNIT_TRAIN");       // тренировка из барака
-        CMD_REGISTRY.put(0x000024AA, "UNIT_CMD_AA");
-        CMD_REGISTRY.put(0x000024AE, "UNIT_CMD_AE");
-        CMD_REGISTRY.put(0x000024E7, "UNIT_CMD_E7");
-        CMD_REGISTRY.put(0x000024BD, "UNIT_CMD_BD");
-        CMD_REGISTRY.put(0x000024C4, "UNIT_CMD_C4");
-        CMD_REGISTRY.put(0x000003E9, "SPECIAL_CMD_3E9");
-
-        // ── Постройки Dark Eldar (entity > 1M) ──────────────────────────────
-        CMD_REGISTRY.put(0x0000C35A, "DE_PLASMA_REACTOR");  // Plasma Generator DE (y≈57-59)
-        CMD_REGISTRY.put(0x0000C359, "DE_BUILD_A");
-        CMD_REGISTRY.put(0x0000C35B, "DE_BUILD_B");
-        CMD_REGISTRY.put(0x0000C35C, "DE_BUILD_C");
-        CMD_REGISTRY.put(0x0000C35F, "DE_BUILD_D");
-        CMD_REGISTRY.put(0x0000C361, "DE_BUILD_E");
-
-        // ── Постройки TAU (entity > 1M) ──────────────────────────────────────
-        CMD_REGISTRY.put(0x0000C354, "BUILD_STRUCTURE_A"); // TAU/DE здание
-        CMD_REGISTRY.put(0x0000C356, "BUILD_STRUCTURE_B"); // TAU здание
-        CMD_REGISTRY.put(0x0000C35D, "BUILD_STRUCTURE_C"); // TAU здание (T2?)
     }
 
     public static void registerCmd(int cmdId, String name) {
@@ -117,8 +127,7 @@ public class CommandStreamParser {
         public String cmdName   = "UNKNOWN";
         public int    entityId;
         public int    playerId;         // ID игрока (0=player1, 1=player2)
-        public int    scSize;           // размер sub-command: 40=реальный приказ, 33/35=прогресс стройки
-      //  public int    scSize;          // размер sub-command (для дебага)
+        public int    scSize;           // 40=явный BUILD-ордер с координатами; 33/35=completion события
         public int    packetSeq;       // номер пакета в потоке
 
         public CommandCategory     category     = CommandCategory.UNKNOWN;
@@ -212,7 +221,7 @@ public class CommandStreamParser {
             parsedPackets++;
 
             if (packetSize > 17) {
-                parsePacket(payloadStart, tick, seq);
+                parsePacket(payloadStart, packetSize, tick, seq);
                 seq++;
             }
 
@@ -233,10 +242,63 @@ public class CommandStreamParser {
 
     // Только 40-byte sub-commands = реальные приказы строить (не прогресс стройки)
     public static boolean isBuildEvent(GameEvent e)          { return e.scSize == 40 && e.category == CommandCategory.BUILD_STRUCTURE; }
-    // sc=40 = явный BUILD-ордер (с координатами). sc=33/35 = события завершения стройки.
-    // C350 = TAU/SM/другие расы. C35A = DE Plasma Reactor.
+
+    /** Явное строительство генератора игроком (sc=40 с координатами). */
     public static boolean isPowerGeneratorBuild(GameEvent e) {
         return e.scSize == 40 && (e.cmdId == CMD_BUILD_POWER_GENERATOR || e.cmdId == 0x0000C35A);
+    }
+
+    /** LP-защитные структуры (Observation Post / Tower of Hate). */
+    public static boolean isLpDefense(GameEvent e) {
+        return e.scSize == 40 && (e.cmdId == CMD_PLACE_BLUEPRINT || e.cmdId == 0x0000C35F);
+    }
+
+    /** Захват LP (снос neutral структуры). */
+    public static boolean isLpCapture(GameEvent e) {
+        return e.cmdId == CMD_DEMOLISH_BUILDING;
+    }
+
+    /** Tech-здания: TAU C35D (Путь к Просвещению), DE C35B (Лаборатория гомункула / Концлагерь). */
+    public static boolean isTechBuilding(GameEvent e) {
+        return e.scSize == 40 && (
+                e.cmdId == 0x0000C35D ||   // TAU T2/T3
+                        e.cmdId == 0x0000C35B      // DE tech (Homunculus Lab / Concentration Camp)
+        );
+        // C35C / C359 / C361 — это приказы юнитам DE (move/spawn), НЕ постройки.
+    }
+
+    /** Тренировка юнитов из зданий (приказ "train") + деплой из главки. */
+    public static boolean isUnitProduction(GameEvent e) {
+        return e.cmdId == 0x000024AF || e.cmdId == 0x000024AC;
+    }
+
+    /** Пополнение отряда / постройка (реальный приказ sc=40 на building entity). */
+    public static boolean isSquadReinforce(GameEvent e) {
+        return e.scSize == 40
+                && (e.cmdId == 0x0000C354 || e.cmdId == 0x0000C356)
+                && e.entityId > 1_000_000;
+    }
+
+    /** Апгрейд здания (LP upgrade и т.п.) — 24AE на building entity. */
+    public static boolean isBuildingUpgrade(GameEvent e) {
+        return e.cmdId == 0x000024AE && e.entityId > 1_000_000;
+    }
+
+    /** Боевой приказ атаки. */
+    public static boolean isAttackOrder(GameEvent e) {
+        return e.cmdId == 0x0000C357;
+    }
+
+    /** Любой приказ юниту (движение/атака/спец). */
+    public static boolean isUnitOrder(GameEvent e) {
+        return e.cmdId == 0x0000C353 || e.cmdId == 0x0000C355
+                || e.cmdId == 0x0000C357 || e.cmdId == 0x0000C358
+                || e.cmdId == 0x0000C35E || e.cmdId == 0x0000C360;
+    }
+
+    /** Спец. абилка / research click. */
+    public static boolean isSpecialAbility(GameEvent e) {
+        return e.cmdId == 0x000003E9;
     }
     public static boolean isDemolishEvent(GameEvent e)       { return e.cmdId == CMD_DEMOLISH_BUILDING; }
 
@@ -257,28 +319,56 @@ public class CommandStreamParser {
         parsedPackets = rejectedPackets = parsedSubs = rejectedSubs = 0;
     }
 
-    private void parsePacket(int payloadStart, int tick, int seq) {
+    private void parsePacket(int payloadStart, int packetSize, int tick, int seq) {
         if (payloadStart + 30 > data.length) return;
 
-        int innerSize  = readIntLE(payloadStart + 25);
+        int cmdCount  = data[payloadStart + 13] & 0xFF;   // сколько команд в пакете
+        int innerSize = readIntLE(payloadStart + 25);
         int innerStart = payloadStart + 30;
         if (innerSize <= 0 || innerStart + innerSize > data.length) return;
 
         int pos    = innerStart;
         int endPos = innerStart + innerSize;
+        int parsed = 0;
 
+        // --- БЛОК 1: первая команда (как раньше, выверенный путь) ---
         while (pos < endPos - 2) {
             int scSize = readUShortLE(pos);
-
             if (!isValidSubCommand(pos, scSize, endPos)) {
                 rejectedSubs++;
                 pos++;
                 continue;
             }
-
             parsedSubs++;
             parseSubCommand(pos, scSize, tick, seq);
+            parsed++;
             pos += scSize;
+        }
+
+        // --- ХВОСТ: остальные команды многокомандного пакета ---
+        // innerSize покрывает только первый блок; блоки 2+ лежат в [endPos..packetEnd).
+        // Сканируем хвост, берём только ИЗВЕСТНЫЕ cmd, кап на (cmdCount - parsed),
+        // чтобы не словить ложные срабатывания и compound-команды.
+        int remaining = cmdCount - parsed;
+        int packetEnd = payloadStart + packetSize;
+        int tp = endPos;
+        while (remaining > 0 && tp < packetEnd - 2) {
+            int scSize = readUShortLE(tp);
+            if (scSize >= 28 && scSize <= 45 && tp + scSize <= packetEnd) {
+                int idOff = idOffset(scSize);
+                int cmdId = (scSize == 40 && (data[tp + 27] & 0xFF) == 3)
+                        ? (0x0000C300 | (data[tp + 28] & 0xFF))
+                        : readIntLE(tp + idOff);
+                if (CMD_REGISTRY.containsKey(cmdId)) {
+                    parsedSubs++;
+                    parseSubCommand(tp, scSize, tick, seq);
+                    parsed++;
+                    remaining--;
+                    tp += scSize;
+                    continue;
+                }
+            }
+            tp++;
         }
     }
 
