@@ -46,7 +46,7 @@ public class CommandStreamParser {
     static {
         // ── Питание (entity > 1M, sc=40 с координатами) ─────────────────────
         CMD_REGISTRY.put(CMD_BUILD_POWER_GENERATOR, "BUILD_GENERATOR");      // TAU/SM/Eldar generator (C350)
-        CMD_REGISTRY.put(0x0000C35A,                "DE_PLASMA_REACTOR");    // DE Plasma Generator
+        CMD_REGISTRY.put(0x0000C35A,                "BUILD_STRUCTURE_B");    // общая постройка (в Tau-vs-DE это была плазма DE)
 
         // ── LP контроль ─────────────────────────────────────────────────────
         CMD_REGISTRY.put(CMD_PLACE_BLUEPRINT,       "PLACE_LP_DEFENSE");     // Observation Post (TAU) / Tower of Hate (DE)
@@ -56,11 +56,11 @@ public class CommandStreamParser {
         CMD_REGISTRY.put(0x0000C35D, "TAU_TECH_BUILDING");  // Путь к Просвещению (T2), Broadside Bay и др.
 
         // ── DE постройки (entity > 1M, sc=40) ───────────────────────────────
-        CMD_REGISTRY.put(0x0000C359, "DE_UNIT_ORDER_A");    // приказ/спавн юнитов DE (НЕ здание)
-        CMD_REGISTRY.put(0x0000C35B, "DE_TECH_BUILDING");   // Лаборатория гомункула / Концлагерь
-        CMD_REGISTRY.put(0x0000C35C, "DE_UNIT_ORDER_C");    // приказ юнитов DE (НЕ здание)
-        CMD_REGISTRY.put(0x0000C35F, "DE_TOWER_OF_HATE");   // Башня ненависти (защита ЛП)
-        CMD_REGISTRY.put(0x0000C361, "DE_UNIT_ORDER_E");
+        CMD_REGISTRY.put(0x0000C359, "UNIT_ORDER_A");    // общий приказ юнитам (не здание)
+        CMD_REGISTRY.put(0x0000C35B, "BUILD_TECH_B");   // общая тех/постройка (раса-зависимо)
+        CMD_REGISTRY.put(0x0000C35C, "UNIT_ORDER_C");    // общий приказ юнитам
+        CMD_REGISTRY.put(0x0000C35F, "BUILD_DEFENSE_B");   // оборонная постройка на точке (раса-зависимо)
+        CMD_REGISTRY.put(0x0000C361, "UNIT_ORDER_E");
 
         // ── Пополнение отрядов / тренировка из зданий (entity > 1M) ─────────
         CMD_REGISTRY.put(0x0000C354, "REINFORCE_SQUAD_A");  // тренировка/пополнение отряда типа A
@@ -82,11 +82,37 @@ public class CommandStreamParser {
         CMD_REGISTRY.put(0x0000C355, "TAU_ABILITY_A");      // TAU спец. (markerlight?)
         CMD_REGISTRY.put(0x0000C357, "UNIT_ATTACK");        // приказ атаковать
         CMD_REGISTRY.put(0x0000C358, "TAU_ABILITY_B");      // TAU спец.
-        CMD_REGISTRY.put(0x0000C360, "DE_ABILITY");         // DE спец. (combat drug?)
+        CMD_REGISTRY.put(0x0000C360, "ABILITY_C");         // спец. способность (раса-зависимо)
         CMD_REGISTRY.put(0x0000C35E, "UNIT_SPECIAL_5");
 
         // ── Спец. абилки / research ─────────────────────────────────────────
         CMD_REGISTRY.put(0x000003E9, "SPECIAL_ABILITY");    // абилка/research click
+
+        // ── Орочьи команды (эксклюзивны для матчей с Орками) ────────────────
+        // Выявлены в Тау-vs-Орк реплее: их не было в Тау-vs-DE. Точное значение
+        // (бойцы/постройки/WAAAGH) не разведено поштучно — помечены как ORK_*.
+        CMD_REGISTRY.put(0x00000736, "ORK_ORDER_A");        // частые приказы (слаги/гретчины?)
+        CMD_REGISTRY.put(0x00000738, "ORK_ORDER_B");
+        CMD_REGISTRY.put(0x0000073A, "ORK_ORDER_C");
+        CMD_REGISTRY.put(0x0000073B, "ORK_ORDER_D");
+        CMD_REGISTRY.put(0x000007D4, "ORK_ORDER_E");
+        CMD_REGISTRY.put(0x00000783, "ORK_ORDER_F");
+        CMD_REGISTRY.put(0x00000787, "ORK_ORDER_G");
+        CMD_REGISTRY.put(0x0000079B, "ORK_ORDER_H");
+        CMD_REGISTRY.put(0x000007C9, "ORK_ORDER_I");
+        CMD_REGISTRY.put(0x000007D7, "ORK_ORDER_J");
+        CMD_REGISTRY.put(0x000007F8, "ORK_ORDER_K");
+        CMD_REGISTRY.put(0x0000077D, "ORK_ORDER_L");
+        CMD_REGISTRY.put(0x00000809, "ORK_ORDER_M");
+        CMD_REGISTRY.put(0x00000531, "ORK_ORDER_N");
+        CMD_REGISTRY.put(0x0000C362, "ORK_BUILD_OR_UNIT_A"); // орочьи постройки/юниты
+        CMD_REGISTRY.put(0x0000C363, "ORK_BUILD_OR_UNIT_B");
+        CMD_REGISTRY.put(0x0000C364, "ORK_BUILD_OR_UNIT_C");
+        CMD_REGISTRY.put(0x0000C365, "ORK_BUILD_OR_UNIT_D");
+        CMD_REGISTRY.put(0x0000C368, "ORK_ABILITY_A");
+        CMD_REGISTRY.put(0x0000C369, "ORK_ABILITY_B");
+        CMD_REGISTRY.put(0x0000C36A, "ORK_ABILITY_C");
+        CMD_REGISTRY.put(0x0000C36B, "ORK_ABILITY_D");
 
         // ── Squad events (если встретятся) ──────────────────────────────────
         CMD_REGISTRY.put(CMD_SQUAD_APPEAR,          "SQUAD_APPEAR");
@@ -188,6 +214,20 @@ public class CommandStreamParser {
 
     private int parsedPackets, rejectedPackets, parsedSubs, rejectedSubs;
 
+    // Атрибуция игрока: payloadStart пакета -> playerId (0/1). Заполняется resolvePlayers().
+    private final Map<Integer, Integer> packetPlayer = new HashMap<>();
+
+    // Якоря игрока A (Tau/SM/Eldar-подобная раса): эксклюзивные абилки/тех.
+    private static final Set<Integer> ANCHOR_A = new HashSet<>(Arrays.asList(
+            0x0000C355, 0x0000C358, 0x0000C35D));
+    // Якоря игрока B (вторая раса). Зависит от матчапа: орочьи ИЛИ DE-эксклюзивные.
+    private static final Set<Integer> ANCHOR_B_ORK = new HashSet<>(Arrays.asList(
+            0x00000736, 0x00000738, 0x0000073A, 0x0000073B, 0x000007D4,
+            0x0000C362, 0x0000C363, 0x0000C364, 0x0000C365,
+            0x0000C368, 0x0000C369, 0x0000C36A, 0x0000C36B));
+    private static final Set<Integer> ANCHOR_B_DE = new HashSet<>(Arrays.asList(
+            0x0000C35A, 0x0000C35F, 0x0000C360, 0x0000C361));
+
     // =========================================================================
     // CONSTRUCTOR
     // =========================================================================
@@ -203,6 +243,7 @@ public class CommandStreamParser {
 
     public ReplayGameState parse() {
         resetState();
+        resolvePlayers();   // matchup-aware: классифицируем пакеты по игрокам ДО основного прохода
 
         int pos = commandStreamStart;
         int seq = 0;
@@ -238,6 +279,132 @@ public class CommandStreamParser {
         return gameState;
     }
 
+    /**
+     * Matchup-aware атрибуция игроков. Факт: каждый пакет принадлежит ОДНОМУ игроку
+     * (проверено — смешанных пакетов нет). Поле игрока в самом пакете отсутствует
+     * (b27 — это фаза команды), поэтому определяем сторону по эксклюзивным cmd_id:
+     *   игрок A — Tau/SM-подобная раса (C355/C358/C35D),
+     *   игрок B — вторая раса (орочьи 07xx/C36x ИЛИ DE C35A/C35F/C360/C361).
+     * Пакеты без якоря дотягиваем ближайшими соседями (игрок отдаёт команды залпами).
+     */
+    private void resolvePlayers() {
+        // 1) Собираем (payloadStart, cmds[]) по всем пакетам + детектим матчап.
+        List<int[]> pkts = new ArrayList<>();   // [payloadStart, side(-1 unknown/0/1)]
+        boolean hasOrk = false, hasDe = false;
+        int pos = commandStreamStart;
+        List<List<Integer>> pktCmds = new ArrayList<>();
+        List<Integer> pktHomeX = new ArrayList<>();   // x базовой постройки (|x|>600) или null=Integer.MIN
+        while (pos < data.length - 4) {
+            int packetSize = readIntLE(pos);
+            if (packetSize == 0) { pos += 4; continue; }
+            if (packetSize < 17 || packetSize > 65536) { pos++; continue; }
+            if (pos + 4 + packetSize > data.length) break;
+            int payloadStart = pos + 4;
+            if ((data[payloadStart] & 0xFF) != 0x50) { pos++; continue; }
+            if (packetSize > 17) {
+                List<Integer> cmds = packetCmdIds(payloadStart, packetSize);
+                if (!cmds.isEmpty()) {
+                    pkts.add(new int[]{payloadStart, -1});
+                    pktCmds.add(cmds);
+                    pktHomeX.add(packetHomeBuildX(payloadStart, packetSize));
+                    for (int c : cmds) {
+                        if (ANCHOR_B_ORK.contains(c)) hasOrk = true;
+                        if (ANCHOR_B_DE.contains(c))  hasDe  = true;
+                    }
+                }
+            }
+            pos += 4 + packetSize;
+        }
+        Set<Integer> anchorB = hasOrk ? ANCHOR_B_ORK : ANCHOR_B_DE;
+        // (если обе расы дали сигнал — берём орочьи как более специфичные)
+
+        // 2) Якорим пакеты.
+        for (int i = 0; i < pkts.size(); i++) {
+            boolean a = false, b = false;
+            for (int c : pktCmds.get(i)) {
+                if (ANCHOR_A.contains(c)) a = true;
+                if (anchorB.contains(c))  b = true;
+            }
+            if (a && !b) pkts.get(i)[1] = 0;
+            else if (b && !a) pkts.get(i)[1] = 1;
+        }
+
+        // 2.5) Позиционный якорь по «дом-стороне». В потоке нет поля игрока, но базовые
+        // постройки (|x|>600) кучкуются у домашней базы. Сторону игрока A определяем
+        // по координатам его же якорных команд (не хардкод), затем сажаем туда постройки.
+        long sumA = 0; int cntA = 0;
+        for (int i = 0; i < pkts.size(); i++) {
+            if (pkts.get(i)[1] == 0 && pktHomeX.get(i) != Integer.MIN_VALUE) { sumA += pktHomeX.get(i); cntA++; }
+        }
+        if (cntA >= 3) {
+            int aSign = (sumA >= 0) ? 1 : -1;            // знак X домашней стороны игрока A
+            for (int i = 0; i < pkts.size(); i++) {
+                if (pkts.get(i)[1] != -1) continue;
+                int hx = pktHomeX.get(i);
+                if (hx == Integer.MIN_VALUE) continue;
+                pkts.get(i)[1] = ((hx >= 0 ? 1 : -1) == aSign) ? 0 : 1;
+            }
+        }
+
+        // 3) Дотягиваем неоднозначные ближайшими соседями.
+        for (int i = 0; i < pkts.size(); i++) {
+            if (pkts.get(i)[1] != -1) continue;
+            int L = -1, R = -1;
+            for (int j = i - 1; j >= 0; j--) if (pkts.get(j)[1] != -1) { L = pkts.get(j)[1]; break; }
+            for (int j = i + 1; j < pkts.size(); j++) if (pkts.get(j)[1] != -1) { R = pkts.get(j)[1]; break; }
+            if (L != -1 && R != -1) pkts.get(i)[1] = L;          // L==R обычно; конфликт → левый
+            else if (L != -1)       pkts.get(i)[1] = L;
+            else if (R != -1)       pkts.get(i)[1] = R;
+            else                    pkts.get(i)[1] = 0;          // якорей вообще нет — всё игроку 0
+        }
+
+        for (int[] p : pkts) packetPlayer.put(p[0], p[1]);
+    }
+
+    /** Извлекает cmd_id всех sub-команд пакета (та же логика, что и парсинг). */
+    private List<Integer> packetCmdIds(int payloadStart, int packetSize) {
+        List<Integer> out = new ArrayList<>();
+        if (payloadStart + 30 > data.length) return out;
+        int innerSize = readIntLE(payloadStart + 25);
+        int innerStart = payloadStart + 30;
+        int packetEnd = payloadStart + packetSize;
+        if (innerSize <= 0) return out;
+        int p = innerStart;
+        int end = Math.min(packetEnd, data.length);
+        while (p < end - 2) {
+            int sc = readUShortLE(p);
+            if (sc >= 28 && sc <= 45 && p + sc <= end) {
+                int b27 = data[p + 27] & 0xFF;
+                int cmdId = (sc == 40 && b27 == 3)
+                        ? (0x0000C300 | (data[p + 28] & 0xFF))
+                        : readIntLE(p + idOffset(sc));
+                if (CMD_REGISTRY.containsKey(cmdId)) { out.add(cmdId); p += sc; continue; }
+            }
+            p++;
+        }
+        return out;
+    }
+
+    /** X базовой постройки пакета (40-byte build с координатами и |x|>600), иначе Integer.MIN_VALUE. */
+    private int packetHomeBuildX(int payloadStart, int packetSize) {
+        if (payloadStart + 30 > data.length) return Integer.MIN_VALUE;
+        int innerStart = payloadStart + 30;
+        int end = Math.min(payloadStart + packetSize, data.length);
+        int p = innerStart;
+        while (p < end - 2) {
+            int sc = readUShortLE(p);
+            if (sc >= 28 && sc <= 45 && p + sc <= end) {
+                if (sc == 40 && p + 40 <= end) {
+                    int x = (short) readUShortLE(p + 34);
+                    int y = (short) readUShortLE(p + 36);
+                    if (y > 0 && y < 200 && Math.abs(x) > 600) return x;
+                }
+                p += sc;
+            } else p++;
+        }
+        return Integer.MIN_VALUE;
+    }
+
     // ── Публичные фильтры ────────────────────────────────────────────────────
 
     // Только 40-byte sub-commands = реальные приказы строить (не прогресс стройки)
@@ -258,13 +425,10 @@ public class CommandStreamParser {
         return e.cmdId == CMD_DEMOLISH_BUILDING;
     }
 
-    /** Tech-здания: TAU C35D (Путь к Просвещению), DE C35B (Лаборатория гомункула / Концлагерь). */
+    /** Tech-здания: только подтверждённый TAU C35D (Путь к Просвещению / T2-T3).
+     *  C35B убран — в матче с Орками это общая команда, а не тех-здание DE. */
     public static boolean isTechBuilding(GameEvent e) {
-        return e.scSize == 40 && (
-                e.cmdId == 0x0000C35D ||   // TAU T2/T3
-                        e.cmdId == 0x0000C35B      // DE tech (Homunculus Lab / Concentration Camp)
-        );
-        // C35C / C359 / C361 — это приказы юнитам DE (move/spawn), НЕ постройки.
+        return e.scSize == 40 && e.cmdId == 0x0000C35D;   // TAU T2/T3
     }
 
     /** Тренировка юнитов из зданий (приказ "train") + деплой из главки. */
@@ -319,8 +483,11 @@ public class CommandStreamParser {
         parsedPackets = rejectedPackets = parsedSubs = rejectedSubs = 0;
     }
 
+    private int currentPacketPlayer = 0;   // игрок текущего пакета (из packetPlayer)
+
     private void parsePacket(int payloadStart, int packetSize, int tick, int seq) {
         if (payloadStart + 30 > data.length) return;
+        currentPacketPlayer = packetPlayer.getOrDefault(payloadStart, 0);
 
         int cmdCount  = data[payloadStart + 13] & 0xFF;   // сколько команд в пакете
         int innerSize = readIntLE(payloadStart + 25);
@@ -399,11 +566,11 @@ public class CommandStreamParser {
         int entityId = readIntLE(offset + 2);
 
         // ── Player detection ────────────────────────────────────────────
-        // data[offset+27] = player flag:
-        //   0x02 → P0 (first GPLY)   for both 40-byte and some 28/33-byte
-        //   0x03 → P1 (second GPLY)
+        // Игрок берётся на уровне ПАКЕТА (resolvePlayers): каждый пакет принадлежит
+        // одному игроку, а b27 — это фаза команды, не игрок. b27 всё ещё нужен ниже
+        // для разбора 40-byte BUILD (другая раскладка при b27==3).
         int b27      = (offset + 27 < data.length) ? (data[offset + 27] & 0xFF) : 0;
-        int playerId = (b27 == 3) ? 1 : 0;
+        int playerId = currentPacketPlayer;
 
         // ── cmdId / category ────────────────────────────────────────────
         // P1's 40-byte BUILD commands use a different byte layout than P0:

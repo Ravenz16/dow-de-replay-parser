@@ -162,14 +162,16 @@ public class Main {
                     if (e.hasCoords) label += String.format(" pos=(%d,%d,%d)", e.x, e.y, e.z);
                 } else {
                     gensCount++;
-                    String race = (e.cmdId == 0x0000C35A) ? "Plasma Reactor" : "Генератор";
-                    label = String.format("⚡ %s #%d", race, gensCount);
+                    // C35A — общая «постройка типа B» (в Tau-vs-DE это была плазма DE,
+                    // здесь — генератор/иное здание второй расы). Без расовой метки.
+                    String kind = (e.cmdId == 0x0000C35A) ? "Постройка B" : "Генератор";
+                    label = String.format("⚡ %s #%d", kind, gensCount);
                     if (e.hasCoords) label += String.format(" pos=(%d,%d,%d)", e.x, e.y, e.z);
                 }
             }
             else if (CommandStreamParser.isLpDefense(e)) {
                 lpCount++;
-                String lpName = (e.cmdId == 0x0000C35F) ? "Башня ненависти (DE)" : "Пост на точке (LP)";
+                String lpName = (e.cmdId == 0x0000C35F) ? "Оборонная постройка" : "Пост на точке (LP)";
                 label = String.format("🛡 %s #%d", lpName, lpCount);
                 if (e.hasCoords) label += String.format(" pos=(%d,%d,%d)", e.x, e.y, e.z);
             }
