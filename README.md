@@ -1,144 +1,99 @@
-# Dow Replay Analyzer (аналитический инструмент)
+# DoW Replay Analyzer
 
-**Набор инструментов для исследования и обратного инжиниринга реплеев Dawn of War Definitive Edition.**  
-Программа не пытается «понять» игру, а помогает разработчику разобраться в структуре файлов: выводит дерево чанков, ищет вложенные `Relic Chunky` заголовки, сигнатуры сжатия (zlib, gzip, lzma), анализирует payload ключевых блоков.
+*Read this in other languages: [Русский](README.ru.md)*
 
-## 📦 Что делает этот инструмент
+A Java tool that parses **Dawn of War** replay files (`.rec`) and reconstructs what each player did — build orders, point captures, unit orders, abilities, and a per-player strategic summary — directly from the binary command stream.
 
-- Строит полное дерево чанков (`FOLD` / `DATA`) рекурсивным парсером.
-- Находит все чанки `GPLY` (игровые данные игроков).
-- Для каждого `DATA`‑чанка выводит первые 128 байт payload и размер.
-- Сканирует все payload на наличие:
-  - Заголовков **zlib** (`0x78 0x01/5E/9C/DA`), **gzip** (`1F 8B`), **LZMA** (`5D`).
-  - Вложенных сигнатур `Relic Chunky` (магическая строка `"Relic Chunky"`).
-- Показывает возможные места сжатых данных, помогая при reverse‑engineering.
+The replay format is undocumented, so the command stream was reverse-engineered byte by byte. This project is the result of that work.
 
-## 🚀 Быстрый старт
+> ⚠️ Unofficial, reverse-engineered tool. Not affiliated with Relic Entertainment or SEGA. It reads its own private copy of the replay bytes and never modifies the file.
 
-### Требования
-- **Java 17+**
-- Файл реплея `.rec`
+---
 
-### Компиляция и запуск
+## What it does
+
+Given a `.rec` file, the analyzer prints a structured report:
+
+- **Header** — map, duration (ticks → seconds), and the player/observer list.
+- **Command stream summary** — events parsed, packets read, sub-commands decoded.
+- **CMD_IDs found** — every command opcode encountered, with counts.
+- **Timeline** — chronological list of decoded events (tick, time, command, entity, position).
+- **Build / capture / generator events** — filtered views of structures and point captures.
+- **Per-player timelines** — events split between the two human players.
+- **Build order** — the key economic and strategic actions per player, in order.
+- **Strategic analysis** — economy (barracks, generators, LP posts, captures, tech) and army (orders, attacks, abilities) per player.
+
+## How it works
+
+A `.rec` file is a Relic Chunky container. The pipeline is:
+
+1. `BinaryReader` — low-level little-endian reader over the raw bytes.
+2. `RecursiveRelicChunkParser` + `RelicChunkNode` + `ChunkSearch` — walk the chunk tree and locate the metadata (map, players) and the **`FOLDINFO`** chunk.
+3. `CommandStreamParser` — the command stream begins right after `FOLDINFO`. This class decodes it into a list of `GameEvent`s and attributes each to a player.
+4. `test.Main` — entry point; runs the pipeline and prints the report.
+
+### Command stream layout (reverse-engineered)
+
+The stream is a flat sequence of **packets**, each representing one game tick for one player:
+
+| Offset | Field | Notes |
+|-------:|-------|-------|
+| `-4`   | packet size | 4-byte LE prefix before the payload |
+| `0`    | `0x50` marker | identifies a command packet |
+| `1..4` | tick | uint32 LE; `tick / 8.0` = seconds |
+| `13`   | command count | number of sub-commands in the packet |
+| `25..28` | inner size | covers only the **first** sub-command block |
+| `30+`  | sub-commands | first block here; later blocks recovered by tail-scan |
+
+Each **sub-command** carries the entity id (`+2..5`), a phase byte at `+27`, and — for the 40-byte form — a position (`x@+34`, `y@+36`, `z@+38`, int16 LE). Sub-command sizes:
+
+- `28 / 33 / 35` — progress / completion markers (no coordinates).
+- `40` — a real placement / order with coordinates.
+- `45` — a compound command embedding several opcodes.
+
+The opcode (`cmd_id`) is read at `+29` for 40-byte commands and `+23` otherwise; the 40-byte build form with phase `3` encodes the type as `0xC300 | byte[28]`.
+
+## Project structure
+
+```
+com.dow.replay.parser.BinaryReader           low-level binary reader
+com.dow.replay.chunk.RelicChunkNode           chunk tree node
+com.dow.replay.chunk.ChunkSearch              chunk lookup helpers
+com.dow.replay.chunk.RecursiveRelicChunkParser  Relic Chunky parser
+com.dow.replay.parser.CommandStreamParser     core: command stream → events + attribution
+test.Main                                     entry point / report printer
+```
+
+## Build & run
+
+Requires **JDK 17** (developed on Amazon Corretto 17). Source is UTF-8.
+
+In IntelliJ IDEA: open the project, set an SDK of 17, and run `test.Main` with the replay path as the program argument:
+
+```
+test.Main scr\replays\<replay>.rec
+```
+
+From the command line:
 
 ```bash
-# склонируйте репозиторий
-git clone https://github.com/Ravenz16/dow-de-replay-parser.git
-cd dow-de-replay-parser
+javac -encoding UTF-8 -d out $(find src -name "*.java")
+java -cp out test.Main scr/replays/<replay>.rec
 ```
 
-# компиляция всех исходников
-```bash
-javac -d out src/com/dow/replay/**/*.java src/test/*.java
-```
+Replay file names follow a `W-<race>-L-<race>` convention (Winner / Loser), e.g. `#1521554-W-ORK-L-TAU.rec` means Orks won and Tau lost.
 
-# запуск на вашем реплее
-```bash
-java -cp out test.Main "C:\путь\к\реплею.rec
-```
-Если файлы лежат не в src, а прямо в корне – укажите правильный classpath. В вашем репозитории структура папок может отличаться, но классы скомпилируются из текущей директории:
+## Known limitations
 
-```bash
-javac com/dow/replay/**/*.java test/Main.java
-java test.Main replay.rec
-```
-## 📊 Пример вывода
-```text
-========== TREE ==========
-ROOT size=0 name= off=0x00000000 children=2
-  FOLDINFO size=329003 name=GameInfo off=0x000000AA children=5
-    FOLDWMAN size=117 name= off=0x00000110 children=2
-      DATASDSC size=97 name= off=0x00000180 children=0
-      DATABASE size=167 name= off=0x00000200 children=0
-    ...
+This is honest reverse-engineering of an undocumented format, and some things are not recoverable from the command stream alone:
 
-========== GPLY ==========
-FOLDGPLY size=125 name= off=0x00001000 children=2
+- **Only state-changing commands are recorded.** Dawn of War logs builds, moves, attacks, abilities, captures, and reinforcements — but **not** selections, camera moves, control-group clicks, or idle orders (the bulk of raw APM). The command count is therefore far lower than a player's real APM, by design.
+- **There is no per-command player field.** Investigated and ruled out: the phase byte tracks build *side of the map*, the entity id is a global time-ordered counter (player ranges overlap), and the packet header bytes are sync hashes. Player attribution is therefore a **heuristic**: race-exclusive command families + home-base position + nearest-neighbour propagation. It is reliable for abilities, race-specific orders, and base structures, but **shared commands (capture / move / attack) can be misattributed** in windows where both players act in alternation.
+- **`cmd_id` meanings are matchup-specific.** Opcodes are race/build-menu blueprints rather than universal action codes — the same opcode can mean different things in different match-ups. Labels are generic where the command is shared and `TAU_*` / `ORK_*` only where confidently race-exclusive.
+- **Opening base buildings can be invisible.** Some early structures are issued via 28-byte commands that merge into completion noise and are not individually resolved.
+- **AI / bot commands are not recorded** in the replay command stream.
+- **Observers** appear as extra player slots (a 1v1 can carry up to 6 spectators) but issue no commands.
 
-========== DATA ==========
-====== PAYLOAD ANALYSIS ======
-DATASDSC size=97 off=0x00000180
-payloadSize=97
-00 01 02 03 ...
+## Status
 
-========== EMBEDDED CHUNKY ==========
-FOUND EMBEDDED CHUNKY!
-FOLDDATA size=12345 name= off=0x00012345
-magicOffset=0x00000123
-
-========== COMPRESSION ==========
-ZLIB possible at FOLDDATA +0x123
-GZIP possible at DATASDSC +0x45
-```
-
-## 🗂️ Структура проекта
-```text
-Dow Replay Analyzer/
-├── com/dow/replay/
-│   ├── analyzer/
-│   │   ├── CompressionScanner.java       # Поиск сигнатур сжатия (zlib/gzip/lzma)
-│   │   ├── EmbeddedChunkyFinder.java     # Поиск вложенных заголовков Relic Chunky
-│   │   └── GameplayPayloadAnalyzer.java  # Дамп payload DATA‑чанков
-│   ├── chunk/
-│   │   ├── ChunkParseResult.java         # Хранит плоский список чанков
-│   │   ├── ChunkSearch.java              # Поиск узлов по id (GPLY, DATA...)
-│   │   ├── ChunkSignature.java           # Сигнатура чанка (тип, id, смещение)
-│   │   ├── ChunkTreePrinter.java         # Красивая печать дерева
-│   │   ├── ProperChunk.java / ProperChunkHeader.java # Вспомогательные структуры
-│   │   ├── RecursiveRelicChunkParser.java # Главный парсер (рекурсивный обход)
-│   │   ├── RelicChunk.java               # Плоское представление чанка
-│   │   └── RelicChunkNode.java           # Узел дерева (с детьми)
-│   └── parser/
-│       ├── BinaryReader.java             # Чтение little‑endian, строк, байтов
-│       └── PacketValidationResult.java   # Результат проверки пакета (не используется)
-└── test/
-    └── Main.java                         # Точка входа, демонстрация всех анализаторов
-```
-## Ключевые классы анализаторов
-
-- **`RecursiveRelicChunkParser`**  
-  Рекурсивно разбирает все `FOLD` и `DATA` чанки, строит дерево, извлекает `payload` для `DATA`.
-
-- **`EmbeddedChunkyFinder`**  
-  Ищет в любом `payload` байтовую последовательность `"Relic Chunky"` – признак вложенного Chunky‑блока (полезно для поиска фрагментов реплея внутри других ресурсов).
-
-- **`CompressionScanner`**  
-  Сканирует каждый `payload` на наличие известных сигнатур сжатия:  
-  zlib (`0x78…`), gzip (`1F 8B`), LZMA (`5D`). Выводит смещение и тип.
-
-- **`GameplayPayloadAnalyzer`**  
-  Для каждого `DATA`-чанка печатает его заголовок, размер и первые 128 байт в hex. Помогает визуально находить повторяющиеся структуры.
-
-- **`ChunkSearch`**  
-  Позволяет быстро найти все узлы с заданным `id` (например, все `GPLY` или все `DATA`).
-
-## ⚠️ Важное замечание
-Это инструмент для исследования, а не готовый парсер игровых событий.
-Он не извлекает actionId, не строит хронологию и не определяет победителя.
-Его цель – показать внутреннюю структуру реплея, найти сжатые участки и вложенные Chunky-блоки, чтобы помочь вам (или мне) в дальнейшем написать полноценный декодер.
-
-## 🛠 План развития
-Реализовать распаковку zlib/gzip для кандидатов, найденных CompressionScanner.
-
-После распаковки – автоматически искать внутри Relic Chunky заголовок.
-
-Для найденных GPLY чанков – попытаться извлечь структуру DATAINFO.
-
-Применить LZSS‑декомпрессию к блокам, начинающимся с FB FF FE 02 и т.п. (как в старых реплеях DoW DE).
-
-Экспорт дерева в JSON для автоматического анализа.
-
-## 🤝 Как использовать результаты
-Запустите инструмент на реплее.
-
-Посмотрите, где CompressionScanner нашёл сигнатуры – вероятно, именно там лежат сжатые команды.
-
-Скопируйте смещение, достаньте payload вручную или доработайте код для распаковки.
-
-Изучите EmbeddedChunkyFinder – возможно, реплей содержит несколько независимых Chunky‑блоков.
-
-## 📜 Лицензия
-MIT (свободное использование, модификация, распространение).
-
-## Автор: Ravenz16
-## Репозиторий: https://github.com/Ravenz16/dow-de-replay-parser
+Actively reverse-engineered across several match-ups (Tau vs Dark Eldar, Ork vs Tau). The command-stream layout and event decoding are stable; player attribution is a best-effort heuristic and continues to improve as more ground-truth replays are analysed.
