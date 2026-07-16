@@ -56,7 +56,7 @@ public class Main {
         printEvents("BUILD EVENTS",
                 events.stream().filter(CommandStreamParser::isBuildEvent).toList());
 
-        printEvents("POWER GENERATOR BUILDS",
+        printEvents("STRUCTURE PLACEMENTS (тип известен частично: 204/208/209, эвристика 90)",
                 events.stream().filter(CommandStreamParser::isPowerGeneratorBuild).toList());
 
         printEvents("DEMOLISH EVENTS",
@@ -143,7 +143,6 @@ public class Main {
                 .toList();
 
         int gensCount = 0, lpCount = 0;
-        boolean barracksSeen = false;   // первая C350 игрока = Казармы, остальные = генераторы
         Double clusterStart = null, clusterEnd = null;
         int clusterCount = 0;
         int clusterCmd = 0;
@@ -152,21 +151,12 @@ public class Main {
             String label = null;
 
             if (CommandStreamParser.isPowerGeneratorBuild(e)) {
-                // В DoW первая базовая постройка C350 = Казармы (барак, откуда выходит пехота),
-                // далее идут Генераторы. Тип здания в команде не закодирован — определяем по порядку.
-                // DE-генератор (Plasma Reactor, C35A) считаем генератором всегда — барак DE
-                // строится отдельной (28-byte, невидимой) командой.
-                if (e.cmdId == 0x0000C350 && !barracksSeen) {
-                    barracksSeen = true;
-                    label = "🏠 Барак (Казармы)";
-                    if (e.hasCoords) label += String.format(" pos=(%d,%d,%d)", e.x, e.y, e.z);
-                } else {
+                // C350/C35A (sc=40) — установка здания. Тип берём из байта [10] (известен для SM).
+                if (e.hasCoords) {
                     gensCount++;
-                    // C35A — общая «постройка типа B» (в Tau-vs-DE это была плазма DE,
-                    // здесь — генератор/иное здание второй расы). Без расовой метки.
-                    String kind = (e.cmdId == 0x0000C35A) ? "Постройка B" : "Генератор";
-                    label = String.format("⚡ %s #%d", kind, gensCount);
-                    if (e.hasCoords) label += String.format(" pos=(%d,%d,%d)", e.x, e.y, e.z);
+                    label = String.format("🏗 %s #%d [тип=%d] pos=(%d,%d,%d)",
+                            CommandStreamParser.buildKindName(e), gensCount,
+                            e.buildSubType, e.x, e.y, e.z);
                 }
             }
             else if (CommandStreamParser.isLpDefense(e)) {
@@ -235,13 +225,9 @@ public class Main {
 
     private static void analyzePlayer(List<GameEvent> events) {
         // === ЭКОНОМИКА И ИНФРАСТРУКТУРА ===
-        // Первая C350 = Казармы, остальные = генераторы (тип не закодирован в команде).
-        long c350     = events.stream().filter(e -> CommandStreamParser.isPowerGeneratorBuild(e)
-                && e.cmdId == 0x0000C350).count();
-        long plasma   = events.stream().filter(e -> CommandStreamParser.isPowerGeneratorBuild(e)
-                && e.cmdId == 0x0000C35A).count();
-        long barracks = c350 > 0 ? 1 : 0;          // первая C350
-        long gens     = (c350 > 0 ? c350 - 1 : 0) + plasma;   // остальные C350 + плазма DE
+        // C350/C35A (sc=40) — установка здания в точку. Тип (барак/генератор/ЛП) в опкоде
+        // НЕ закодирован, поэтому считаем суммарно как «постройки», без выдумки типа.
+        long structures = events.stream().filter(CommandStreamParser::isPowerGeneratorBuild).count();
         long lpDef    = events.stream().filter(CommandStreamParser::isLpDefense).count();
         long lpCap    = events.stream().filter(CommandStreamParser::isLpCapture).count();
         long tech     = events.stream().filter(CommandStreamParser::isTechBuilding).count();
@@ -256,8 +242,8 @@ public class Main {
         long special  = events.stream().filter(CommandStreamParser::isSpecialAbility).count();
 
         System.out.println("  Экономика:");
-        System.out.printf("    barracks=%-2d  generators=%-2d  lp_defenses=%-2d  lp_captures=%-2d  tech_buildings=%-2d  upgrades=%d%n",
-                barracks, gens, lpDef, lpCap, tech, upgrade);
+        System.out.printf("    structures(тип?)=%-2d  lp_defenses=%-2d  lp_captures=%-2d  tech_buildings=%-2d  upgrades=%d%n",
+                structures, lpDef, lpCap, tech, upgrade);
         System.out.println("  Армия:");
         System.out.printf("    train_orders=%-2d  unit_deploy=%-2d  squad_reinforce=%-2d%n",
                 trainOrd, deploy, reinf);

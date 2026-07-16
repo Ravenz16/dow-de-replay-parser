@@ -45,7 +45,7 @@ public class CommandStreamParser {
     ));
     static {
         // ── Питание (entity > 1M, sc=40 с координатами) ─────────────────────
-        CMD_REGISTRY.put(CMD_BUILD_POWER_GENERATOR, "BUILD_GENERATOR");      // TAU/SM/Eldar generator (C350)
+        CMD_REGISTRY.put(CMD_BUILD_POWER_GENERATOR, "BUILD_OR_PRODUCE");    // общий опкод: построить здание (sc40+коорд) ИЛИ заказать юнита (sc35/33)
         CMD_REGISTRY.put(0x0000C35A,                "BUILD_STRUCTURE_B");    // общая постройка (в Tau-vs-DE это была плазма DE)
 
         // ── LP контроль ─────────────────────────────────────────────────────
@@ -53,7 +53,7 @@ public class CommandStreamParser {
         CMD_REGISTRY.put(CMD_DEMOLISH_BUILDING,     "CAPTURE_LP");           // снос neutral structure при захвате
 
         // ── TAU постройки (entity > 1M, sc=40) ──────────────────────────────
-        CMD_REGISTRY.put(0x0000C35D, "TAU_TECH_BUILDING");  // Путь к Просвещению (T2), Broadside Bay и др.
+        CMD_REGISTRY.put(0x0000C35D, "TECH_BUILDING_A");  // Путь к Просвещению (T2), Broadside Bay и др.
 
         // ── DE постройки (entity > 1M, sc=40) ───────────────────────────────
         CMD_REGISTRY.put(0x0000C359, "UNIT_ORDER_A");    // общий приказ юнитам (не здание)
@@ -79,9 +79,9 @@ public class CommandStreamParser {
 
         // ── Приказы юнитам (entity < 1M) ────────────────────────────────────
         CMD_REGISTRY.put(0x0000C353, "UNIT_MOVE");          // движение/общий приказ юниту
-        CMD_REGISTRY.put(0x0000C355, "TAU_ABILITY_A");      // TAU спец. (markerlight?)
+        CMD_REGISTRY.put(0x0000C355, "ABILITY_A");      // TAU спец. (markerlight?)
         CMD_REGISTRY.put(0x0000C357, "UNIT_ATTACK");        // приказ атаковать
-        CMD_REGISTRY.put(0x0000C358, "TAU_ABILITY_B");      // TAU спец.
+        CMD_REGISTRY.put(0x0000C358, "ABILITY_B");      // TAU спец.
         CMD_REGISTRY.put(0x0000C360, "ABILITY_C");         // спец. способность (раса-зависимо)
         CMD_REGISTRY.put(0x0000C35E, "UNIT_SPECIAL_5");
 
@@ -105,10 +105,10 @@ public class CommandStreamParser {
         CMD_REGISTRY.put(0x0000077D, "ORK_ORDER_L");
         CMD_REGISTRY.put(0x00000809, "ORK_ORDER_M");
         CMD_REGISTRY.put(0x00000531, "ORK_ORDER_N");
-        CMD_REGISTRY.put(0x0000C362, "ORK_BUILD_OR_UNIT_A"); // орочьи постройки/юниты
-        CMD_REGISTRY.put(0x0000C363, "ORK_BUILD_OR_UNIT_B");
-        CMD_REGISTRY.put(0x0000C364, "ORK_BUILD_OR_UNIT_C");
-        CMD_REGISTRY.put(0x0000C365, "ORK_BUILD_OR_UNIT_D");
+        CMD_REGISTRY.put(0x0000C362, "BUILD_OR_UNIT_A"); // постройки/юниты (раса-зависимо: Ork/SM/...)
+        CMD_REGISTRY.put(0x0000C363, "BUILD_OR_UNIT_B");
+        CMD_REGISTRY.put(0x0000C364, "BUILD_OR_UNIT_C");
+        CMD_REGISTRY.put(0x0000C365, "BUILD_OR_UNIT_D");
         CMD_REGISTRY.put(0x0000C368, "ORK_ABILITY_A");
         CMD_REGISTRY.put(0x0000C369, "ORK_ABILITY_B");
         CMD_REGISTRY.put(0x0000C36A, "ORK_ABILITY_C");
@@ -161,6 +161,7 @@ public class CommandStreamParser {
 
         public boolean hasCoords;
         public int     x, y, z;
+        public int     buildSubType = -1;  // байт [10] у sc=40: тип объекта (204=барак,208=ЛП,209=produce — для SM)
         public double  confidence;
         public byte[]  rawData;
 
@@ -216,6 +217,7 @@ public class CommandStreamParser {
 
     // Атрибуция игрока: payloadStart пакета -> playerId (0/1). Заполняется resolvePlayers().
     private final Map<Integer, Integer> packetPlayer = new HashMap<>();
+    private List<Integer> lastPktEntity = null;   // представительные entity пакетов (для кластеров)
 
     // Якоря игрока A (Tau/SM/Eldar-подобная раса): эксклюзивные абилки/тех.
     private static final Set<Integer> ANCHOR_A = new HashSet<>(Arrays.asList(
@@ -294,6 +296,7 @@ public class CommandStreamParser {
         int pos = commandStreamStart;
         List<List<Integer>> pktCmds = new ArrayList<>();
         List<Integer> pktHomeX = new ArrayList<>();   // x базовой постройки (|x|>600) или null=Integer.MIN
+        List<Integer> pktEntity = new ArrayList<>();   // представительный entity-id пакета (для кластеров)
         while (pos < data.length - 4) {
             int packetSize = readIntLE(pos);
             if (packetSize == 0) { pos += 4; continue; }
@@ -307,6 +310,7 @@ public class CommandStreamParser {
                     pkts.add(new int[]{payloadStart, -1});
                     pktCmds.add(cmds);
                     pktHomeX.add(packetHomeBuildX(payloadStart, packetSize));
+                    pktEntity.add(packetRepEntity(payloadStart, packetSize));
                     for (int c : cmds) {
                         if (ANCHOR_B_ORK.contains(c)) hasOrk = true;
                         if (ANCHOR_B_DE.contains(c))  hasDe  = true;
@@ -315,6 +319,20 @@ public class CommandStreamParser {
             }
             pos += 4 + packetSize;
         }
+
+        // сохраняем entity для метода кластеров
+        this.lastPktEntity = pktEntity;
+        // ── ОСНОВНОЙ МЕТОД (чистый 1×1): разделение по КЛАСТЕРУ entity-id ──────
+        // Открытие: у каждого игрока свой непрерывный диапазон entity-id, и эти
+        // диапазоны не пересекаются (проверено: команды двух кластеров не делят ни
+        // одного cmd_id). Игрок = кластер. Это НАСТОЯЩЕЕ поле игрока, не эвристика.
+        // Работает, когда в сортированных entity есть один доминирующий разрыв
+        // (1×1). При мульти-слоте/наблюдателях разрыва нет → откат к якорям ниже.
+        if (resolveByEntityClusters(pkts)) {
+            for (int[] p : pkts) packetPlayer.put(p[0], p[1]);
+            return;
+        }
+
         Set<Integer> anchorB = hasOrk ? ANCHOR_B_ORK : ANCHOR_B_DE;
         // (если обе расы дали сигнал — берём орочьи как более специфичные)
 
@@ -359,6 +377,70 @@ public class CommandStreamParser {
         }
 
         for (int[] p : pkts) packetPlayer.put(p[0], p[1]);
+    }
+
+    /** Представительный entity-id пакета: первый валидный entity юнита/здания ИГРОКА.
+     *  Пропускаем команды, ссылающиеся на ТОЧКУ, а не на свой юнит — захват (C352) и
+     *  установку ЛП на точку (C351): их entity = id точки (нейтральный диапазон), он
+     *  не относится к кластеру игрока. Такие пакеты дотянутся соседями.
+     *  Integer.MIN_VALUE если своего entity нет. */
+    private int packetRepEntity(int payloadStart, int packetSize) {
+        if (payloadStart + 30 > data.length) return Integer.MIN_VALUE;
+        int innerStart = payloadStart + 30;
+        int end = Math.min(payloadStart + packetSize, data.length);
+        int p = innerStart;
+        while (p < end - 2) {
+            int sc = readUShortLE(p);
+            if (sc >= 28 && sc <= 45 && p + sc <= end) {
+                int b27 = data[p + 27] & 0xFF;
+                int cmdId = (sc == 40 && b27 == 3)
+                        ? (0x0000C300 | (data[p + 28] & 0xFF))
+                        : readIntLE(p + idOffset(sc));
+                boolean pointRef = (cmdId == 0x0000C351 || cmdId == 0x0000C352);
+                if (!pointRef && p + 6 <= end) {
+                    int e = readIntLE(p + 2);
+                    if (e > 0 && e < 100_000_000 && e != 671088640) return e;
+                }
+                p += sc;
+            } else p++;
+        }
+        return Integer.MIN_VALUE;
+    }
+
+    /** Разделение игроков по кластеру entity-id (надёжно для 1×1).
+     *  Возвращает true, если найден чёткий бимодальный разрыв и игроки расставлены. */
+    private boolean resolveByEntityClusters(List<int[]> pkts) {
+        if (lastPktEntity == null) return false;
+        List<Integer> ents = new ArrayList<>();
+        for (int e : lastPktEntity) if (e != Integer.MIN_VALUE) ents.add(e);
+        if (ents.size() < 20) return false;
+        Collections.sort(ents);
+        // ищем два крупнейших разрыва между соседними entity
+        long topGap = -1, secondGap = -1; int splitLo = 0, splitHi = 0;
+        for (int i = 0; i < ents.size() - 1; i++) {
+            long g = (long) ents.get(i + 1) - ents.get(i);
+            if (g > topGap) { secondGap = topGap; topGap = g; splitLo = ents.get(i); splitHi = ents.get(i + 1); }
+            else if (g > secondGap) { secondGap = g; }
+        }
+        // бимодальность: доминирующий разрыв должен сильно превосходить второй
+        // (1×1 → ratio в десятки/сотни раз; мульти-слот/наблюдатели → ratio ~1)
+        if (secondGap <= 0 || topGap < secondGap * 5L || topGap < 50_000L) return false;
+        long split = ((long) splitLo + splitHi) / 2L;
+        // нижний кластер → игрок 0 (первый слот GPLY), верхний → игрок 1
+        for (int i = 0; i < pkts.size(); i++) {
+            int e = lastPktEntity.get(i);
+            if (e == Integer.MIN_VALUE) { pkts.get(i)[1] = -1; continue; }
+            pkts.get(i)[1] = (e < split) ? 0 : 1;
+        }
+        // пакеты без валидного entity дотягиваем ближайшим соседом
+        for (int i = 0; i < pkts.size(); i++) {
+            if (pkts.get(i)[1] != -1) continue;
+            int L = -1, R = -1;
+            for (int j = i - 1; j >= 0; j--) if (pkts.get(j)[1] != -1) { L = pkts.get(j)[1]; break; }
+            for (int j = i + 1; j < pkts.size(); j++) if (pkts.get(j)[1] != -1) { R = pkts.get(j)[1]; break; }
+            pkts.get(i)[1] = (L != -1) ? L : (R != -1 ? R : 0);
+        }
+        return true;
     }
 
     /** Извлекает cmd_id всех sub-команд пакета (та же логика, что и парсинг). */
@@ -410,14 +492,51 @@ public class CommandStreamParser {
     // Только 40-byte sub-commands = реальные приказы строить (не прогресс стройки)
     public static boolean isBuildEvent(GameEvent e)          { return e.scSize == 40 && e.category == CommandCategory.BUILD_STRUCTURE; }
 
-    /** Явное строительство генератора игроком (sc=40 с координатами). */
+    /** ПОДТВЕРЖДЕНО на 68 реплеях (9 рас, ~9300 sc=40 BUILD-событий): байт [10] (buildSubType)
+     *  у ~85-95% этих событий равен 0 — и это НЕ постройки, а движение/формация юнитов, которое
+     *  переиспользует тот же 40-байтный формат (sc=40, cat=BUILD_STRUCTURE) с координатами.
+     *  Признак подтверждён по паттерну: координаты плавно "шагают" тик за тиком, entity_id
+     *  каждый раз новый (разные юниты в формации отряда), позиции размазаны по карте — типичное
+     *  поведение марша, а не установки здания. Настоящая постройка/produce-заказ ВСЕГДА имеет
+     *  buildSubType > 0 (проверено на 204/208/209 и на статистически стабильных кодах 90/86/84,
+     *  которые повторяются с одинаковой частотой у ВСЕХ рас под РАЗНЫМИ cmd_id — т.е. buildSubType
+     *  это общий "blueprint id" движка, а не привязан к конкретному cmd_id).
+     *  → любой реальный build/produce-фильтр обязан требовать buildSubType > 0. */
+    public static boolean isRealBuildOrProduce(GameEvent e) {
+        return e.scSize == 40 && e.category == CommandCategory.BUILD_STRUCTURE && e.buildSubType > 0;
+    }
+
+    /** Явное строительство здания игроком (sc=40 с координатами, buildSubType>0), КРОМЕ produce-заказов. */
     public static boolean isPowerGeneratorBuild(GameEvent e) {
-        return e.scSize == 40 && (e.cmdId == CMD_BUILD_POWER_GENERATOR || e.cmdId == 0x0000C35A);
+        return isRealBuildOrProduce(e)
+                && (e.cmdId == CMD_BUILD_POWER_GENERATOR || e.cmdId == 0x0000C35A)
+                && !isProduceOrder(e);
+    }
+
+    /** C350 с rally-координатами (тип 209 у SM) — это заказ юнита из здания, а НЕ постройка.
+     *  Подтверждено ground truth: игрок ставил только барак, а 209-команды были заказом скаутов. */
+    public static boolean isProduceOrder(GameEvent e) {
+        return e.cmdId == CMD_BUILD_POWER_GENERATOR && e.buildSubType == 209;
+    }
+
+    /** Имя типа постройки по байту [10] (buildSubType) — общий "blueprint id" движка,
+     *  проверено, что 204/208/209 повторяются у SM/DE/Sisters с одинаковым смыслом
+     *  (барак ~1 раз в начале, ЛП-пост несколько раз за игру, юнит-заказ рано и часто).
+     *  90 — статистически надёжный кандидат на "Генератор" (встречается у SM/DE/Tau/Sisters/Guard
+     *  ~2 раза за игру под разными cmd_id), но НЕ подтверждён ground truth — помечен эвристикой. */
+    public static String buildKindName(GameEvent e) {
+        switch (e.buildSubType) {
+            case 204: return "Барак (T1 произв. здание)";
+            case 208: return "Пост ЛП";
+            case 209: return "Заказ юнита";
+            case 90:  return "Генератор? (эвристика)";
+        }
+        return "тип " + e.buildSubType;
     }
 
     /** LP-защитные структуры (Observation Post / Tower of Hate). */
     public static boolean isLpDefense(GameEvent e) {
-        return e.scSize == 40 && (e.cmdId == CMD_PLACE_BLUEPRINT || e.cmdId == 0x0000C35F);
+        return isRealBuildOrProduce(e) && (e.cmdId == CMD_PLACE_BLUEPRINT || e.cmdId == 0x0000C35F);
     }
 
     /** Захват LP (снос neutral структуры). */
@@ -428,7 +547,7 @@ public class CommandStreamParser {
     /** Tech-здания: только подтверждённый TAU C35D (Путь к Просвещению / T2-T3).
      *  C35B убран — в матче с Орками это общая команда, а не тех-здание DE. */
     public static boolean isTechBuilding(GameEvent e) {
-        return e.scSize == 40 && e.cmdId == 0x0000C35D;   // TAU T2/T3
+        return isRealBuildOrProduce(e) && e.cmdId == 0x0000C35D;   // TAU T2/T3
     }
 
     /** Тренировка юнитов из зданий (приказ "train") + деплой из главки. */
@@ -610,6 +729,7 @@ public class CommandStreamParser {
             e.x = readShortLE(offset + 34);
             e.y = readShortLE(offset + 36);
             e.z = readShortLE(offset + 38);
+            e.buildSubType = data[offset + 10] & 0xFF;   // тип объекта (см. GameEvent.buildSubType)
         }
 
         e.confidence   = calculateConfidence(e);
