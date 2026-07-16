@@ -294,15 +294,38 @@ public class Main {
         byte[] p = sdsc.payload;
         for (int i = 0; i < p.length - 5; i++) {
             if (p[i]=='D' && p[i+1]=='A' && p[i+2]=='T' && p[i+3]=='A' && p[i+4]==':') {
-                StringBuilder sb = new StringBuilder();
-                int j = i;
-                while (j < p.length && p[j] >= 0x20 && p[j] < 0x7F) sb.append((char) p[j++]);
-                String path = sb.toString();
+                String path = extractLengthPrefixedMapPath(p, i);
                 int last = path.lastIndexOf('\\');
                 return last >= 0 ? path.substring(last + 1) : path;
             }
         }
         return "Unknown";
+    }
+
+    /**
+     * The "DATA:...\map_name" path isn't null-terminated - it's a Pascal-style string, a 4-byte
+     * little-endian byte count sitting immediately before it, followed by exactly that many bytes
+     * and then straight into the next field's binary data with no separator. Scanning forward for
+     * "printable ASCII" alone (the old approach) can't tell the string's own bytes apart from a
+     * following field's bytes that just happen to also decode as printable, and was confirmed live
+     * to append 1-2 garbage characters onto the real map name (e.g. "2P_OUTER_REACHES" ->
+     * "2P_OUTER_REACHES`B", the `B` coming from the next field's leading bytes 0x60 0x42) - silently
+     * breaking that replay's auto-link to its ranked match, since the corrupted name can never equal
+     * a real Match.map value. Falls back to the old scan if the length prefix isn't there or doesn't
+     * look sane, so an unexpected format still degrades to the previous (imperfect but working)
+     * behavior instead of losing the map name outright.
+     */
+    private static String extractLengthPrefixedMapPath(byte[] p, int start) {
+        if (start >= 4) {
+            int len = readIntLE(p, start - 4);
+            if (len > 0 && start + len <= p.length) {
+                return new String(p, start, len, StandardCharsets.US_ASCII);
+            }
+        }
+        StringBuilder sb = new StringBuilder();
+        int j = start;
+        while (j < p.length && p[j] >= 0x20 && p[j] < 0x7F) sb.append((char) p[j++]);
+        return sb.toString();
     }
 
     private static int extractDurationTicks(RelicChunkNode root, byte[] data) {
@@ -402,3 +425,4 @@ public class Main {
                 | ((b[off+2] & 0xFF) << 16) | ((b[off+3] & 0xFF) << 24);
     }
 }
+

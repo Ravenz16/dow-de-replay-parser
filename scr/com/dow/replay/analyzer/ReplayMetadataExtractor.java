@@ -137,19 +137,43 @@ public class ReplayMetadataExtractor {
             byte[] p = sdsc.payload;
             for (int i = 0; i < p.length - 5; i++) {
                 if (p[i] == 'D' && p[i+1] == 'A' && p[i+2] == 'T' && p[i+3] == 'A' && p[i+4] == ':') {
-                    StringBuilder sb = new StringBuilder();
-                    int j = i;
-                    while (j < p.length && p[j] >= 0x20 && p[j] < 0x7F) {
-                        sb.append((char) p[j]);
-                        j++;
-                    }
-                    String path = sb.toString();
+                    String path = extractLengthPrefixedString(p, i);
                     int lastSlash = path.lastIndexOf('\\');
                     return lastSlash >= 0 ? path.substring(lastSlash + 1) : path;
                 }
             }
         }
         return "Unknown Map";
+    }
+
+    /**
+     * The "DATA:...\map_name" path isn't null-terminated - it's a Pascal-style string, a 4-byte
+     * little-endian byte count sitting immediately before it, followed by exactly that many bytes
+     * and then straight into the next field's binary data with no separator. Scanning forward for
+     * "printable ASCII" alone (the old approach) can't tell the difference between the string's own
+     * bytes and a following field's bytes that just happen to also decode as printable, and was
+     * confirmed live to append 1-2 garbage characters onto the real map name (e.g.
+     * "2P_OUTER_REACHES" -> "2P_OUTER_REACHES`B", the `B` coming from the next field's leading
+     * bytes 0x60 0x42) - silently breaking that replay's auto-link to its ranked match, since the
+     * corrupted name can never equal a real Match.map value. Falls back to the old scan if the
+     * length prefix isn't there or doesn't look sane, so an unexpected format still degrades to the
+     * previous (imperfect but working) behavior instead of losing the map name outright.
+     */
+    private String extractLengthPrefixedString(byte[] p, int start) {
+        if (start >= 4) {
+            int len = (p[start - 4] & 0xFF) | ((p[start - 3] & 0xFF) << 8)
+                    | ((p[start - 2] & 0xFF) << 16) | ((p[start - 1] & 0xFF) << 24);
+            if (len > 0 && start + len <= p.length) {
+                return new String(p, start, len, StandardCharsets.US_ASCII);
+            }
+        }
+        StringBuilder sb = new StringBuilder();
+        int j = start;
+        while (j < p.length && p[j] >= 0x20 && p[j] < 0x7F) {
+            sb.append((char) p[j]);
+            j++;
+        }
+        return sb.toString();
     }
 
     private int extractMapSize() {
